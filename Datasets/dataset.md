@@ -18,9 +18,16 @@ ds.save_to_disk("Dataset/validation", ds["validation"])
 ## Training and Saving Tokenizer
 
 ```python
-from GPT.tokenizer import BPETokenizer
+from Datasets.tokenizer import BPETokenizer
 
 # Saves the tokenizer
-tokenizer = BPETokenizer(path = "Datasets/tokenizer.json", vocab_size = None, files = ["Datasets/train","\
-Datasets/test","Datasets/validation"])
+tokenizer = BPETokenizer(path = "Datasets/tokenizer.json", files = ["Datasets/train","Datasets/test","Datasets/validation"])
+
+# Test
+SENTENCES = ["Hello there ! how are you !", "What's your name?"]
+for a in tokenizer.encode(SENTENCES):
+    print(a.tokens)
+
+# ['<|START|>', 'Hello', 'there', '!', 'how', 'are', 'you', '!', '<|END|>']
+# ['<|START|>', 'What', "'", 's', 'your', 'name', '?', '<|END|>']
 ````

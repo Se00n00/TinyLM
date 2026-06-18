@@ -4,6 +4,24 @@ import torch
 import torch.nn.functional as F
 from dataclasses import dataclass
 
+@dataclass
+class Config:
+    num_layer: int = 10
+    max_len: int = 1024
+    vocab_size: int = 30000
+    block_size: int = 8
+
+    d_model: int = 1024
+    num_heads: int = 8
+    dropout_prob: float = 0.5
+    
+    # Feedforward
+    ff_hidden_d: int|None = 4096
+    ff_gated:bool = True
+
+    # RMS Norm
+    norm_epsilon:float = 1e-8
+
 class LayerNorm(nn.Module):
     def __init__(self, d_model:int, device = 'cpu'):
         super().__init__()
@@ -104,25 +122,6 @@ class EmbeddingLayer(nn.Module):
         # [B, L, d_model] <-- ([B, L, d_model]+[B, L, d_model]) <-- [B,L]
         return self.token_encoding(X) + self.position_encoding(X)
 
-@dataclass
-class Config:
-    num_layer: int
-    max_len: int
-    vocab_size: int
-    block_size: int
-
-    d_model: int
-    num_heads: int
-    dropout_prob: float
-    
-    # Feedforward
-    ff_hidden_d: int|None
-    ff_gated:bool
-
-    # RMS Norm
-    norm_epsilon:float
-
-
 class Block(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
@@ -138,7 +137,7 @@ class Block(nn.Module):
 
         return X
 
-class Transformer(nn.Module):
+class Model(nn.Module):
     def __init__(self, config: Config):
         super().__init__()
 
