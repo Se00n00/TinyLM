@@ -285,6 +285,7 @@ if __name__ == "__main__":
     EFFECTIVE_BATCH_SIZE = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
     
     datalen = len(train_data)
+    
     num_params = sum(p.numel() for p in model.parameters())
     print(
         "\n--------------------------------------------------------------------------"
