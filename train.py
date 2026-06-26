@@ -23,7 +23,10 @@ def parse_arguments():
     |--------------------------------------|
         GPT : GPT-2 Style Transformer
     """
-
+    
+    parser.add_argument(
+        "--training_name", type=str, help=MODEL_HELP
+    )
     parser.add_argument(
         "--model", type=str, choices=["GPT"], default="GPT", help=MODEL_HELP
     )
@@ -78,7 +81,7 @@ def parse_arguments():
     parser.add_argument(
         "--vram_limit_mb",
         type=int,
-        default=3500,
+        default=4000,
         help="Target upper limit of VRAM usage in MB",
     )
     parser.add_argument(
@@ -109,13 +112,16 @@ def parse_arguments():
     return args
 
 
-def get_batch(step, data, data_len, batch_size, max_seq_len, device):
+def get_batch(step, data, data_len, batch_size, max_seq_len, device, rand=False):
     """
     Fetches a sequential batch of X and Y from tokenized binary data.
     """
     start = (step * batch_size * max_seq_len) % (data_len - max_seq_len - 1)
 
     ix = torch.arange(start, start + batch_size * max_seq_len, max_seq_len)
+
+    if rand == True:
+        ix = torch.randint(start, data_len-max_seq_len-1, (batch_size,)) 
 
     x = torch.stack(
         [torch.from_numpy(data[i : i + max_seq_len].astype(np.int64)) for i in ix]
@@ -127,40 +133,77 @@ def get_batch(step, data, data_len, batch_size, max_seq_len, device):
 
     return x.to(device), y.to(device)
 
+from tqdm import tqdm
 
 @torch.no_grad()
-def evaluate_loss(model, data, batch_size, max_seq_len, device):
+def evaluate_loss(model, data, batch_size, max_seq_len, device, eval_steps=1000):
     model.eval()
 
-    losses = []
+    total_loss = 0.0
 
-    max_steps = (len(data) - 1) // (batch_size * max_seq_len)
+    for step in tqdm(range(eval_steps)):
+        x, y = get_batch(
+            step,
+            data,
+            len(data),
+            batch_size,
+            max_seq_len,
+            device
+        )
 
-    for step in range(max_steps):
-        x, y = get_batch(step, data, len(data), batch_size, max_seq_len, device)
+        with autocast(device_type=device_type, dtype=ptdtype):
+            _, loss = model(x, y)
 
-        _, loss = model(x, y)
-        losses.append(loss.item())
+        total_loss += loss.item()
 
     model.train()
-    return sum(losses) / len(losses)
 
+    return total_loss / eval_steps
 
+import math
+import csv
+from pathlib import Path
+
+def init_csv(csv_path):
+    if not Path(csv_path).exists():
+        with open(csv_path, "w", newline="") as f:
+            writer = csv.writer(f)
+
+            writer.writerow([
+                "step",
+                "loss",
+                "perplexity",
+                "learning_rate"
+            ])
+def log_metrics(csv_path, step, loss, lr):
+    file = open(csv_path, "a", newline="")
+    
+    writer = csv.writer(file)
+    writer.writerow([
+        step,
+        loss,
+        math.exp(loss),
+        lr
+    ])
+    
+    file.flush()
+        
 DATAPATH = {
     "train": {
-        "token_path": "Datasets/Tokens/train.bin",
+        "token_path": "Datasets/Tokens/train_tokens.bin",
         "dataset_path": "Datasets/train",
     },
     "validation": {
-        "token_path": "Datasets/Tokens/val.bin",
+        "token_path": "Datasets/Tokens/val_tokens.bin",
         "dataset_path": "Datasets/validation",
-    },
-    "test": {"token_path": "Datasets/Tokens/test.bin", "dataset_path": "Datasets/test"},
+    }
 }
 
 if __name__ == "__main__":
     args = parse_arguments()
-
+    init_csv(f"logs/train_{args.training_name}.csv")
+    init_csv(f"logs/validation_{args.training_name}.csv")
+    
     # Create directories
     os.makedirs(args.checkpoint_dir, exist_ok=True)
 
@@ -173,8 +216,8 @@ if __name__ == "__main__":
     prepare_datasets(DATAPATH)
 
     # 2. LOAD MEMMAPPED TOKEN DATA
-    train_data = np.memmap("Datasets/Tokens/train.bin", dtype=np.uint16, mode="r")
-    val_data = np.memmap("Datasets/Tokens/val.bin", dtype=np.uint16, mode="r")
+    train_data = np.memmap("Datasets/Tokens/train_tokens.bin", dtype=np.uint16, mode="r")
+    val_data = np.memmap("Datasets/Tokens/val_tokens.bin", dtype=np.uint16, mode="r")
 
     # 4. Instantiate Model and Setup Device / Precision
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -266,15 +309,7 @@ if __name__ == "__main__":
 
     t0 = time.time()
 
-    # Save a run metadata JSON
-    run_meta = {
-        "model": args.model,
-        "vocab_size": tokenizer.vocab_size,
-        "batch_size": args.batch_size,
-        "max_seq_len": args.max_seq_len,
-        "learning_rate": args.learning_rate,
-        "max_steps": args.max_steps,
-    }
+    
 
     # Training state
     model.train()
@@ -287,21 +322,41 @@ if __name__ == "__main__":
     datalen = len(train_data)
     
     num_params = sum(p.numel() for p in model.parameters())
+    
+    tokens_per_step = (
+        BATCH_SIZE
+        * args.max_seq_len
+        * GRAD_ACCUM_STEPS
+    )
+
+    steps_per_epoch = math.ceil(
+        len(train_data) / tokens_per_step
+    )
+    # Save a run metadata JSON
+    run_meta = {
+        "model": args.model,
+        "vocab_size": tokenizer.vocab_size,
+        "batch_size": args.batch_size,
+        "max_seq_len": args.max_seq_len,
+        "learning_rate": args.learning_rate,
+        "max_steps": steps_per_epoch,
+    }
     print(
         "\n--------------------------------------------------------------------------"
     )
-    print(f"DATASET: TRAIN TOKENS {datalen:,}| VALIDATION TOKENS: {len(val_data):,}")
+    print(f"DATASET: TRAIN TOKENS {datalen:,}| VALIDATION TOKENS: {len(val_data):,} | TOKENS PER STEPS: {tokens_per_step}| STEPS PER EPOCH: {steps_per_epoch}")
     print(f"DEVICE: {device} MODEL: {args.model}| PARAMETERS:{num_params/(1024*1024)}| BATCH SIZE:{BATCH_SIZE}")
     print(
         "----------------------------------------------------------------------------\n"
     )
 
-    while step < args.max_steps:
+
+    while step < steps_per_epoch:
         # Check GPU temperature and pause if needed
         check_and_cooldown_gpu(args.max_temp, args.cooldown_temp)
 
         # Calculate learning rate
-        lr = get_lr(step, args.max_steps, args.learning_rate, args.warmup_steps)
+        lr = get_lr(step, steps_per_epoch, args.learning_rate, args.warmup_steps)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
@@ -392,11 +447,11 @@ if __name__ == "__main__":
         step_time_ms = (t_end - t_start) * 1000
 
         # Periodic evaluation & logging
-        if step % args.eval_interval == 0 or step == args.max_steps - 1:
+        if step % args.eval_interval == 0 or step == steps_per_epoch - 1:
             val_loss = evaluate_loss(
                 model,
                 val_data,
-                BATCH_SIZE,
+                1,
                 args.max_seq_len,
                 device
             )
@@ -413,9 +468,10 @@ if __name__ == "__main__":
                 if get_gpu_temperature() is not None
                 else ""
             )
+            log_metrics(f"logs/validation_{args.training_name}.csv", step, val_loss, 0)
 
             print(
-                f"Step {step:4d}/{args.max_steps:4d} | "
+                f"Step {step:4d}/{steps_per_epoch:4d} | "
                 f"Train Loss: {loss_accum:.4f} (PPL: {train_ppl:.2f}) | "
                 f"Val Loss: {val_loss:.4f} (PPL: {val_ppl:.2f}) | "
                 f"LR: {lr:.2e} | "
@@ -458,10 +514,11 @@ if __name__ == "__main__":
                 else ""
             )
             print(
-                f"Step {step:4d}/{args.max_steps:4d} | Train Loss: {loss_accum:.4f} | LR: {lr:.2e} | VRAM: {allocated_mb:.1f}MB{temp_str} | Time: {step_time_ms:.1f}ms",
+                f"Step {step:4d}/{steps_per_epoch:4d} | Train Loss: {loss_accum:.4f} | LR: {lr:.2e} | VRAM: {allocated_mb:.1f}MB{temp_str} | Time: {step_time_ms:.1f}ms",
                 end="\r",
             )
-
+        
+        log_metrics(f"logs/train_{args.training_name}.csv", step, loss_accum, lr)
         step += 1
 
     total_time_min = (time.time() - t0) / 60

@@ -3,3 +3,8 @@ tokenizers
 
 # Datasets
 datasets
+
+# LOGGING
+textual 
+plotext 
+pandas

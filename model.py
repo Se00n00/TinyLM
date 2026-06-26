@@ -85,10 +85,10 @@ class Attention(nn.Module):
         self.attention_dropout = nn.Dropout(dropout_prob)
         self.output_dropout = nn.Dropout(dropout_prob)
 
-        # self.register_buffer(
-        #        "attention_mask",
-        #        torch.triu(torch.full((1, 1, max_len, max_len), float("-inf")), diagonal = 1)
-        #        )
+        self.register_buffer(
+                "attention_mask",
+                torch.triu(torch.full((1, 1, max_len, max_len), float("-inf")), diagonal = 1)
+                )
 
     def forward(self, x:torch.Tensor):
         batch, seqlen, d_model = x.shape
@@ -101,19 +101,19 @@ class Attention(nn.Module):
         K = K.view(batch, seqlen, self.num_heads, self.head_dim).transpose(1,2)
         V = V.view(batch, seqlen, self.num_heads, self.head_dim).transpose(1,2)
 
-        output = F.scaled_dot_product_attention(
-            Q,
-            K,
-            V,
-            attn_mask=None,
-            dropout_p=self.attention_dropout.p if self.training else 0.0,
-            is_causal=True,
-        )
-        # scores = torch.matmul(Q, K.transpose(2,3)) / math.sqrt(self.head_dim)
-        # scores = scores + self.attention_mask[:, :, :seqlen, :seqlen]
-        # scores = F.softmax(scores, dim = -1)
-        # scores = self.attention_dropout(scores)
-        # output = torch.matmul(scores, V)
+        #output = F.scaled_dot_product_attention(
+        #    Q,
+        #    K,
+        #    V,
+        #    attn_mask=None,
+        #    dropout_p=self.attention_dropout.p if self.training else 0.0,
+        #    is_causal=True,
+        #)
+        scores = torch.matmul(Q, K.transpose(2,3)) / math.sqrt(self.head_dim)
+        scores = scores + self.attention_mask[:, :, :seqlen, :seqlen]
+        scores = F.softmax(scores, dim = -1)
+        scores = self.attention_dropout(scores)
+        output = torch.matmul(scores, V)
 
         # [B, L, D_model] <-- [B, L, num_heads, head_dim] <-- [B, num_heads, L, head_dim]
         output = output.transpose(1, 2).contiguous().view(batch, seqlen, -1)
