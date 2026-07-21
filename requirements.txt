@@ -8,3 +8,7 @@ datasets
 textual 
 plotext 
 pandas
+
+
+# Evaluation
+lm-eval

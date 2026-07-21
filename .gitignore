@@ -13,3 +13,10 @@ GPT_pt.pt
 GPT_it.pt
 
 test_tokenizer.py
+
+
+to_run.txt
+Evaluation/results_GPT_IFT.json
+Evaluation/results_GPT_PFT_2.json
+Evaluation/results_GPT_it.json
+Evaluation/results_GPT_PT.json

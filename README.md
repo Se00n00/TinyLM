@@ -389,6 +389,59 @@ python inference.py \
 
 ---
 
+## 📊 Model Evaluation
+
+Evaluate checkpoints using standard language model benchmarks with the custom `lm_eval` wrapper in the [Evaluation](file:///run/media/se00n00/P/LittleParrot/GPT/Evaluation) directory.
+
+### Custom LM Harness Wrapper
+The evaluation suite contains a PyTorch-native adapter `CustomGPTLM` that hooks our custom transformer models directly into the `lm-evaluation-harness` (v0.4.x) framework:
+- **Loading & Alignment**: Automatically detects the vocabulary size from checkpoint state dicts to initialize the model layers, handling the tokenizer expansions (e.g., from `32768` to `32771` tokens).
+- **OOM Resilience**: Automatically reduces batch sizes or falls back to CPU if a CUDA Out of Memory error is raised during validation.
+- **Save Formats**: Full sample-level logs are outputted to JSON formats for downstream debugging and trace analyses.
+
+### Run Evaluation
+To evaluate a model checkpoint:
+```bash
+python Evaluation/eval.py --checkpoint checkpoints/GPT_IFT.pt
+```
+
+To run a comparative evaluation of all checkpoints in the workspace:
+```bash
+python Evaluation/eval.py --checkpoint all
+```
+
+Parameters:
+- `--checkpoint`: Path to model checkpoint file (or `'all'`).
+- `--tasks`: Comma-separated benchmarks (default: `hellaswag,arc_easy,arc_challenge,boolq,piqa,winogrande,mmlu`).
+- `--batch_size`: Evaluation batch size (default: `8`).
+- `--limit`: Limit the number of samples per task (for quick testing).
+
+### Benchmark Comparison Results
+
+Both **`GPT_PT`** (Base Pretrained checkpoint) and **`GPT_IFT`** (Instruction Fine-Tuned checkpoint) were evaluated on the validation sets of the standard benchmarks:
+
+| Benchmark Task | GPT_PT (Pretrained) | GPT_IFT (Instruct-Tuned) | Metric |
+| :--- | :---: | :---: | :---: |
+| **HellaSwag** | 0.2731 | 0.2721 | `acc_norm` |
+| **ARC-Easy** | 0.3822 | 0.3775 | `acc_norm` |
+| **ARC-Challenge** | 0.2278 | 0.2210 | `acc_norm` |
+| **BoolQ** | 0.6190 | 0.5835 | `acc` |
+| **PiQA** | 0.5631 | 0.5495 | `acc_norm` |
+| **Winogrande** | 0.4980 | 0.4964 | `acc` |
+| **MMLU** (57 subjects) | 0.2296 | 0.2484 | `acc` |
+| **SciQ** | 0.6030 | - | `acc_norm` |
+| **LogiQA** | 0.2657 | - | `acc_norm` |
+| **OpenBookQA** | 0.2740 | - | `acc_norm` |
+| **Commonsense_QA** | 0.1974 | - | `acc` |
+| **BLiMP** | 0.7537 | - | `acc` |
+| **GSM8K** | *Pending* | - | `exact_match` |
+| **TriviaQA** | *Pending* | - | `exact_match` |
+| **WikiText** | *Pending* | - | `word_perplexity` |
+
+Evaluation details and full raw output predictions are saved under the [Evaluation/](file:///run/media/se00n00/P/LittleParrot/GPT/Evaluation) directory.
+
+---
+
 ## 📜 License
 
 This codebase is licensed under the [MIT License](file:///run/media/se00n00/P/LittleParrot/GPT/LICENSE). Feel free to modify and adapt it for research or commercial applications.
