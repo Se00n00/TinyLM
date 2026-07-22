@@ -12,6 +12,12 @@ best_GPT.pt
 GPT_pt.pt
 GPT_it.pt
 
+# HF-Model Conversions
+hf_models
+p2h.py
+pth.py
+
+# Tests
 test_tokenizer.py
 
 
@@ -22,3 +28,4 @@ Evaluation/results_GPT_it.json
 Evaluation/results_GPT_PT.json
 
 ev/
+
