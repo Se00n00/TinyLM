@@ -7,25 +7,24 @@
 [![Pipeline: PT | IFT | PFT](https://img.shields.io/badge/Pipeline-PT%20%7C%20IFT%20%7C%20PFT-orange.svg)](#)
 
 
-**TinyLM-1-70M** is an end-to-end, lightweight PyTorch custom transformer framework designed for efficient training, alignment, and evaluation of compact language models (~70M parameters). Engineered for research and resource-constrained environments, it provides clean, PyTorch-native implementations across the full LLM lifecycle—from autoregressive pre-training (PT) and supervised instruction fine-tuning (IFT) to Direct Preference Optimization (DPO). TinyLM-1-70M incorporates modern architectural features (RMSNorm, SwiGLU, pre-normalization, and experimental Mixture-of-Experts) while providing complete transparency and full control over every layer.
+TinyLM-1-70M is a compact decoder-only Transformer language model designed for efficient instruction following and conversational AI. The model has approximately 72M parameters and has been fine-tuned using Supervised Fine-Tuning (SFT) on an instruction-response dataset to improve chat capabilities while maintaining a lightweight footprint suitable for local inference and resource-constrained environments.
 
 ---
 
 ## Navigation Menu
 
-- [Architecture](#mathematical--algorithmic-architecture)
-- [Installation](#installation--data-preparation)
+- [Model Architecture Overview](#model-architecture-overview)
+- [Model Evaluation](#model-evaluation)
+- [Deep-Dive Algorithmic Mechanics](#deep-dive-algorithmic-mechanics)
+- [Installation & Data Preparation](#installation--data-preparation)
 - [3-Stage Pipeline](#the-3-stage-llm-pipeline)
 - [Streaming Inference](#asynchronous-streaming-inference)
-- [Model Evaluation](#model-evaluation)
 
 ---
 
-## Mathematical & Algorithmic Architecture
+## Model Architecture Overview
 
 TinyLM-1-70M leverages a pre-normalization architecture with gated feedforward networks and optional Mixture of Experts.
-
-### Model Architecture Overview
 
 The schematic sequence mapping input text processing through the networks is illustrated below:
 
@@ -46,11 +45,82 @@ The schematic sequence mapping input text processing through the networks is ill
  [INPUT] + ──[LEARNED ENCODING]
 ```
 
-Below is the integrated breakdown of each constituent layer, combining mathematical formulations, algorithmic pseudocode, and references to active code locations.
+---
 
-### 1. Learned Embeddings
+## Model Evaluation
 
-Combines token identities with absolute learned position encoding to form continuous representations.
+### Benchmark Comparison Results
+
+All benchmark evaluations below were executed using `lm-evaluation-harness` (`lm-eval`). For every reference model listed, we evaluated them ourselves using `lm-eval` under identical evaluation conditions to ensure direct, fair, and reproducible comparison with **TinyLM-1-70M**.
+
+#### 1. Pretrained Models Evaluation
+
+Comparative zero-shot and few-shot evaluation results for pretrained base models:
+
+| Category | Benchmark Task (Metric) | TinyLM-1-70M (Base, 70M) | GPT-2 (Base, 124M)* | Supra-50M (Base, 50M)* | SmolLM2-135M (Base, 135M)* |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **Commonsense & Logic** | **HellaSwag** (AN*) | 0.2568 | 0.3114 | 0.3178 | **0.4322** |
+| | **CommonsenseQA** (Acc*) | 0.1957 | 0.1957 | **0.1966** | 0.1933 |
+| | **PiQA** (AN*) | 0.5550 | 0.6251 | 0.6208 | **0.6861** |
+| | **Winogrande** (Acc*) | 0.5036 | 0.5162 | 0.5099 | **0.5304** |
+| **Language Modeling** | **WikiText** (PPL* ↓) | 84.56 | 37.37 | 44.95 | **21.06** |
+| **Linguistic & Syntax** | **BLiMP** (Acc*) | 0.7538 | **0.8215** | 0.7632 | 0.8007 |
+| **Mathematical Reasoning** | **GSM8K** (5-shot, EM*) | 0.0015 | 0.0068 | **0.0235** | 0.0220 |
+| **Open-Domain Fact Retrieval** | **TriviaQA** (EM*) | 0.0000 | 0.0030 | 0.0041 | **0.0495** |
+| **Science & Domain Knowledge** | **ARC-Easy** (AN*) | 0.3013 | 0.3948 | 0.4600 | **0.5871** |
+| | **ARC-Challenge** (AN*) | 0.2637 | 0.2270 | 0.2500 | **0.2952** |
+| | **SciQ** (AN*) | 0.2310 | 0.6440 | 0.6810 | **0.7860** |
+| | **OpenBookQA** (AN*) | **0.3520** | 0.2720 | 0.3060 | 0.3260 |
+| | **MMLU** (57 subjects, Acc*) | 0.2295 | 0.2292 | 0.2301 | **0.2410** |
+
+`* Short-form metric definitions:`
+- **AN***: `acc_norm` (Length-normalized Accuracy)
+- **Acc***: `acc` (Standard Raw Accuracy)
+- **EM***: `exact_match` (Exact Match string accuracy)
+- **PPL***: `word_perplexity` (Perplexity on test set; lower score indicates better language modeling)
+- `*`: *Denotes reference models evaluated locally by us using `lm-eval`.*
+
+---
+
+#### 2. Instruction-Tuned Models Evaluation
+
+Comparative evaluation results for instruction-fine-tuned (IFT) models:
+
+| Category | Benchmark Task (Metric) | TinyLM-1-70M (Instruct, 70M) | SmolLM2-135M (Instruct, 135M)* |
+| :--- | :--- | :---: | :---: |
+| **Commonsense & Logic** | **HellaSwag** (AN*) | 0.2762 | **0.4031** |
+| | **CommonsenseQA** (Acc*) | 0.1957 | **0.2105** |
+| | **PiQA** (AN*) | 0.5506 | **0.6725** |
+| | **Winogrande** (Acc*) | 0.5036 | **0.5280** |
+| **Instruction Following** | **IFEval** (Acc*) | 0.1232 | **0.2990** |
+| **Language Modeling** | **WikiText** (PPL* ↓) | 147.29 | **24.11** |
+| **Linguistic & Syntax** | **BLiMP** (Acc*) | 0.6979 | **0.8039** |
+| **Mathematical Reasoning** | **GSM8K** (5-shot, EM*) | **0.0182** | 0.0144 |
+| **Open-Domain Fact Retrieval** | **TriviaQA** (EM*) | 0.0000 | **0.0035** |
+| **Science & Domain Knowledge** | **ARC-Easy** (AN*) | 0.2929 | **0.4571** |
+| | **ARC-Challenge** (AN*) | 0.2321 | **0.2858** |
+| | **SciQ** (AN*) | 0.2260 | **0.6960** |
+| | **OpenBookQA** (AN*) | 0.2920 | **0.3280** |
+| | **MMLU** (57 subjects, Acc*) | 0.2295 | **0.2470** |
+
+`* Short-form metric definitions:`
+- **AN***: `acc_norm` (Length-normalized Accuracy)
+- **Acc***: `acc` (Standard Raw Accuracy)
+- **EM***: `exact_match` (Exact Match string accuracy)
+- **PPL***: `word_perplexity` (Perplexity on test set; lower score indicates better language modeling)
+- `*`: *Denotes reference models evaluated locally by us using `lm-eval` (IFEval for TinyLM-1-70M reflects prompt strict: `0.0832`, inst strict: `0.1631`, avg: `0.1232`; SmolLM2-135M-Instruct IFEval avg: `0.2990`).*
+
+Evaluation details and full raw output predictions are saved under the [Evaluation/](file:///run/media/se00n00/P/LittleParrot/GPT/Evaluation) directory.
+
+---
+
+## Deep-Dive Algorithmic Mechanics
+
+Below is the integrated breakdown of each constituent layer, combining mathematical formulations, algorithmic pseudocode, and inline code location links.
+
+### 1. Learned Embeddings — [`EmbeddingLayer`](https://github.com/Se00n00/GPT/blob/main/model.py#L122)
+
+Combines token identities with absolute learned position encoding to form continuous representations via [`EmbeddingLayer`](https://github.com/Se00n00/GPT/blob/main/model.py#L122).
 
 #### Mathematical Formulation
 $$\text{Embedding}(X) = E(X) + P(\text{Positions})$$
@@ -72,14 +142,11 @@ LearnedEmbedding(X:[B, L]): --> [B, L, D]
     return X_pos + X_tok
 ```
 
-#### Active Code Location
-* Class: [EmbeddingLayer](file:///run/media/se00n00/P/LittleParrot/GPT/model.py#L122) in [model.py](file:///run/media/se00n00/P/LittleParrot/GPT/model.py).
-
 ---
 
-### 2. Normalization Layers [RMSNorm](file:///run/media/se00n00/P/LittleParrot/GPT/model.py#L36)
+### 2. Normalization Layers — [`RMSNorm`](https://github.com/Se00n00/GPT/blob/main/model.py#L36)
 
-Performs scale-normalization on layer inputs. The model uses RMSNorm to omit the mean-centering step for faster training throughput:
+Performs scale-normalization on layer inputs. The model uses [`RMSNorm`](https://github.com/Se00n00/GPT/blob/main/model.py#L36) (with standard [`LayerNorm`](https://github.com/Se00n00/GPT/blob/main/model.py#L25) also available) to omit the mean-centering step for faster training throughput:
 
 #### Mathematical Formulation
 $$\text{RMSNorm}(X) = \frac{X}{\sqrt{\frac{1}{d} \sum_{i=1}^d X_i^2 + \epsilon}} \odot W$$
@@ -99,14 +166,11 @@ RMSNorm(X:[B, L, D]):  --> [B, L, D]
     return x^ @ y  # y:[D] --> [B, l, D] Broadcasting across seq length and batches
 ```
 
-#### Active Code Location
-* Class:  in [model.py](file:///run/media/se00n00/P/LittleParrot/GPT/model.py). (Standard [LayerNorm](file:///run/media/se00n00/P/LittleParrot/GPT/model.py#L25) is also available).
-
 ---
 
-### 3. Causal Multi-Head Attention
+### 3. Causal Multi-Head Attention — [`Attention`](https://github.com/Se00n00/GPT/blob/main/model.py#L72)
 
-Allows tokens to query and incorporate information from preceding tokens.
+Allows tokens to query and incorporate information from preceding tokens via [`Attention`](https://github.com/Se00n00/GPT/blob/main/model.py#L72).
 
 #### Mathematical Formulation
 $$Q = X W_Q, \quad K = X W_K, \quad V = X W_V$$
@@ -140,14 +204,11 @@ Multi_Head_Attention(X:[B, L, D]): --> [B, L, D]
     return Attention @ W_O
 ```
 
-#### Active Code Location
-* Class: [Attention](file:///run/media/se00n00/P/LittleParrot/GPT/model.py#L72) in [model.py](file:///run/media/se00n00/P/LittleParrot/GPT/model.py).
-
 ---
 
-### 4. Gated FeedForward (SwiGLU)
+### 4. Gated FeedForward (SwiGLU) — [`FeedForward`](https://github.com/Se00n00/GPT/blob/main/model.py#L48)
 
-Projects representation dimensions up, applies gating logic, and projects back down.
+Projects representation dimensions up, applies gating logic, and projects back down using [`FeedForward`](https://github.com/Se00n00/GPT/blob/main/model.py#L48).
 
 #### Mathematical Formulation
 $$\text{FFN}_{\text{gated}}(X) = \text{Dropout}\Big( \big(\text{SiLU}(X W_{\text{up}}) \odot (X W_{\text{gate}}) \big) W_{\text{down}} \Big)$$
@@ -167,14 +228,11 @@ FeedForward(X:[B, L, D]): --> [B, L, D]
     return temp
 ```
 
-#### Active Code Location
-* Class: [FeedForward](file:///run/media/se00n00/P/LittleParrot/GPT/model.py#L48) in [model.py](file:///run/media/se00n00/P/LittleParrot/GPT/model.py).
-
 ---
 
-### 5. Transformer Block
+### 5. Transformer Block — [`Block`](https://github.com/Se00n00/GPT/blob/main/model.py#L134)
 
-Combines Attention, FeedForward, Normalization, and Residual connections into a single pre-normalized layer block.
+Combines Attention, FeedForward, Normalization, and Residual connections into a single pre-normalized layer block via [`Block`](https://github.com/Se00n00/GPT/blob/main/model.py#L134).
 
 #### Mathematical Formulation
 $$X_1 = X + \text{Attention}(\text{RMSNorm}(X))$$
@@ -191,14 +249,11 @@ Block(X:[B, L, D]): --> [B, L, D]
     return X
 ```
 
-#### Active Code Location
-* Class: [Block](file:///run/media/se00n00/P/LittleParrot/GPT/model.py#L134) in [model.py](file:///run/media/se00n00/P/LittleParrot/GPT/model.py).
-
 ---
 
-### 6. Consolidated Model
+### 6. Consolidated Model — [`Model`](https://github.com/Se00n00/GPT/blob/main/model.py#L149)
 
-Stacks multiple blocks sequentially and projects the final output representations back to the vocabulary dimension.
+Stacks multiple blocks sequentially and projects the final output representations back to the vocabulary dimension via [`Model`](https://github.com/Se00n00/GPT/blob/main/model.py#L149).
 
 #### Mathematical Formulation
 $$X_0 = \text{Embedding}(X)$$
@@ -225,22 +280,16 @@ Model(X:[B, L]): --> [B, L, D]
     return output
 ```
 
-#### Active Code Location
-* Class: [Model](file:///run/media/se00n00/P/LittleParrot/GPT/model.py#L149) in [model.py](file:///run/media/se00n00/P/LittleParrot/GPT/model.py).
-
 ---
 
-### 7. Mixture of Experts (MoE) - Experimental
+### 7. Mixture of Experts (MoE) — [`MoE`](https://github.com/Se00n00/GPT/blob/main/Model/layers.py#L137)
 
-Directs tokens dynamically to expert FFN subnetworks to scale model parameters while maintaining active compute efficiency.
+Directs tokens dynamically to expert FFN subnetworks to scale model parameters while maintaining active compute efficiency via [`MoE`](https://github.com/Se00n00/GPT/blob/main/Model/layers.py#L137) (experimental).
 
 #### Mathematical Formulation
 $$\text{Router}(X) = \text{softmax}(\text{TopK}(X W_{\text{expert\_gate}}, k))$$
 
 $$\text{MoE}(X) = \sum_{i \in \text{TopK}} \text{Router}(X)_i \cdot \text{Expert}_i(X)$$
-
-#### Active Code Location
-* Class: [MoE](file:///run/media/se00n00/P/LittleParrot/GPT/Model/layers.py#L137) in [Model/layers.py](file:///run/media/se00n00/P/LittleParrot/GPT/Model/layers.py).
 
 ---
 
@@ -335,70 +384,3 @@ python inference.py \
   --top_k 40 \
   --top_p 0.9
 ```
-
----
-
-## Model Evaluation
-
-### Benchmark Comparison Results
-
-All benchmark evaluations below were executed using `lm-evaluation-harness` (`lm-eval`). For every reference model listed, we evaluated them ourselves using `lm-eval` under identical evaluation conditions to ensure direct, fair, and reproducible comparison with **TinyLM-1-70M**.
-
-#### 1. Pretrained Models Evaluation
-
-Comparative zero-shot and few-shot evaluation results for pretrained base models:
-
-| Category | Benchmark Task (Metric) | TinyLM-1-70M (Base, 70M) | GPT-2 (Base, 124M)* | Supra-50M (Base, 50M)* | SmolLM2-135M (Base, 135M)* |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| **Commonsense & Logic** | **HellaSwag** (AN*) | 0.2568 | 0.3114 | 0.3178 | **0.4322** |
-| | **CommonsenseQA** (Acc*) | 0.1957 | 0.1957 | **0.1966** | 0.1933 |
-| | **PiQA** (AN*) | 0.5550 | 0.6251 | 0.6208 | **0.6861** |
-| | **Winogrande** (Acc*) | 0.5036 | 0.5162 | 0.5099 | **0.5304** |
-| **Language Modeling** | **WikiText** (PPL* ↓) | 84.56 | 37.37 | 44.95 | **21.06** |
-| **Linguistic & Syntax** | **BLiMP** (Acc*) | 0.7538 | **0.8215** | 0.7632 | 0.8007 |
-| **Mathematical Reasoning** | **GSM8K** (5-shot, EM*) | 0.0015 | 0.0068 | **0.0235** | 0.0220 |
-| **Open-Domain Fact Retrieval** | **TriviaQA** (EM*) | 0.0000 | 0.0030 | 0.0041 | **0.0495** |
-| **Science & Domain Knowledge** | **ARC-Easy** (AN*) | 0.3013 | 0.3948 | 0.4600 | **0.5871** |
-| | **ARC-Challenge** (AN*) | 0.2637 | 0.2270 | 0.2500 | **0.2952** |
-| | **SciQ** (AN*) | 0.2310 | 0.6440 | 0.6810 | **0.7860** |
-| | **OpenBookQA** (AN*) | **0.3520** | 0.2720 | 0.3060 | 0.3260 |
-| | **MMLU** (57 subjects, Acc*) | 0.2295 | 0.2292 | 0.2301 | **0.2410** |
-
-`* Short-form metric definitions:`
-- **AN***: `acc_norm` (Length-normalized Accuracy)
-- **Acc***: `acc` (Standard Raw Accuracy)
-- **EM***: `exact_match` (Exact Match string accuracy)
-- **PPL***: `word_perplexity` (Perplexity on test set; lower score indicates better language modeling)
-- `*`: *Denotes reference models evaluated locally by us using `lm-eval`.*
-
----
-
-#### 2. Instruction-Tuned Models Evaluation
-
-Comparative evaluation results for instruction-fine-tuned (IFT) models:
-
-| Category | Benchmark Task (Metric) | TinyLM-1-70M (Instruct, 70M) | SmolLM2-135M (Instruct, 135M)* |
-| :--- | :--- | :---: | :---: |
-| **Commonsense & Logic** | **HellaSwag** (AN*) | 0.2762 | **0.4031** |
-| | **CommonsenseQA** (Acc*) | 0.1957 | **0.2105** |
-| | **PiQA** (AN*) | 0.5506 | **0.6725** |
-| | **Winogrande** (Acc*) | 0.5036 | **0.5280** |
-| **Instruction Following** | **IFEval** (Acc*) | 0.1232 | **0.2990** |
-| **Language Modeling** | **WikiText** (PPL* ↓) | 147.29 | **24.11** |
-| **Linguistic & Syntax** | **BLiMP** (Acc*) | 0.6979 | **0.8039** |
-| **Mathematical Reasoning** | **GSM8K** (5-shot, EM*) | **0.0182** | 0.0144 |
-| **Open-Domain Fact Retrieval** | **TriviaQA** (EM*) | 0.0000 | **0.0035** |
-| **Science & Domain Knowledge** | **ARC-Easy** (AN*) | 0.2929 | **0.4571** |
-| | **ARC-Challenge** (AN*) | 0.2321 | **0.2858** |
-| | **SciQ** (AN*) | 0.2260 | **0.6960** |
-| | **OpenBookQA** (AN*) | 0.2920 | **0.3280** |
-| | **MMLU** (57 subjects, Acc*) | 0.2295 | **0.2470** |
-
-`* Short-form metric definitions:`
-- **AN***: `acc_norm` (Length-normalized Accuracy)
-- **Acc***: `acc` (Standard Raw Accuracy)
-- **EM***: `exact_match` (Exact Match string accuracy)
-- **PPL***: `word_perplexity` (Perplexity on test set; lower score indicates better language modeling)
-- `*`: *Denotes reference models evaluated locally by us using `lm-eval` (IFEval for TinyLM-1-70M reflects prompt strict: `0.0832`, inst strict: `0.1631`, avg: `0.1232`; SmolLM2-135M-Instruct IFEval avg: `0.2990`).*
-
-Evaluation details and full raw output predictions are saved under the [Evaluation/](file:///run/media/se00n00/P/LittleParrot/GPT/Evaluation) directory.
