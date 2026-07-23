@@ -10,6 +10,10 @@
 TinyLM-1-70M is a compact decoder-only Transformer language model designed for efficient instruction following and conversational AI. The model has approximately 72M parameters and has been fine-tuned using Supervised Fine-Tuning (SFT) on an instruction-response dataset to improve chat capabilities while maintaining a lightweight footprint suitable for local inference and resource-constrained environments.
 
 ---
+<img src="Benchmark.png">
+<em>All evaluations are zero-shot unless stated otherwise, and i used lm_eval to run them</em>
+
+---
 
 ## Navigation Menu
 
