@@ -9,8 +9,16 @@ import torch.nn.functional as F
 # 
 # Instruction Fine-tunning >
 # loss = torch.nn.functional.cross_entropy(X, Y, ignore_index = prompt_tokens_index)
-# 
 
+def get_cross_entropy_loss(X:torch.tensor, Y:torch.tensor, pad_index = -100):
+    # X:[B, L, VOCAB_SIZE] --> [B*L, VOCAB_SIZE], Y: [B, L] --> [B*L]
+
+    loss = F.cross_entropy(
+        X.view(-1, X.size(-1)), Y.view(-1), ignore_index=pad_index
+    )
+    
+    return loss
+    
 def token_level_kd_loss(teacher_output:torch.tensor, student_output:torch.tensor, loss_coefficient=0.3, temperature = 1):
 
     vocab_size = student_output.size(-1)
@@ -22,7 +30,7 @@ def token_level_kd_loss(teacher_output:torch.tensor, student_output:torch.tensor
     teacher_soft_prob = F.softmax(teacher_logits / temperature, dim=-1)
     student_soft_log_prob = F.log_softmax(student_logits / temperature, dim=-1)
     
-    # Compute KL Div (Always use 'batchmean' to average correctly across the batch)
+    # Compute KL Div 
     kl_div = F.kl_div(student_soft_log_prob, teacher_soft_prob, reduction='batchmean')
     
     # Scale the KL loss back up to match the magnitude of standard gradients

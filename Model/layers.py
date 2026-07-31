@@ -13,31 +13,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class EmbeddingLayer(nn.Module):
-    def __init__(self, vocab_size: int, block_size: int, d_model: int):
-        super().__init__()
-        self.token_encoding = nn.Embedding(vocab_size, d_model)
-        self.position_encoding = nn.Embedding(block_size, d_model)
-
-    def forward(self, X: torch.Tensor):
-        seq_len = X.size(1)
-        pos = torch.arange(0, seq_len, dtype=torch.long, device=X.device)
-        # [B, L, d_model] <-- [B, L, d_model] + [L, d_model]
-        return self.token_encoding(X) + self.position_encoding(pos)
-
-
-class LayerNorm(nn.Module):
-    def __init__(self, d_model: int, device="cpu"):
-        super().__init__()
-
-        self.weights = nn.Parameter(torch.ones(d_model))  # requires_grad = True
-        self.bias = nn.Parameter(torch.ones(d_model))
-
-    def forward(self, X: torch.Tensor) -> torch.Tensor:
-        normallized = (X - X.mean()) / X.std()
-        return normallized * self.weights + self.bias
-
-
 class RMSNorm(nn.Module):
     def __init__(self, d_model: int, epsilon=1e-8):
         super().__init__()
@@ -54,7 +29,7 @@ class RMSNorm(nn.Module):
 class Attention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, max_len: int, dropout_prob: float):
         super().__init__()
-
+        
         assert d_model % num_heads == 0, (
             "Number of Heads must be divisible to model dim"
         )
@@ -65,14 +40,39 @@ class Attention(nn.Module):
         self.k_proj = nn.Linear(d_model, head_dim * num_heads, bias=False)
         self.v_proj = nn.Linear(d_model, head_dim * num_heads, bias=False)
         self.o_proj = nn.Linear(d_model, d_model, bias=False)
-
-        self.attention_dropout = nn.Dropout(dropout_prob)
+        
         self.output_dropout = nn.Dropout(dropout_prob)
-
+        self.attention_dropout = nn.Dropout(dropout_prob)
+        
         self.register_buffer(
-            "attention_mask",
-            torch.triu(torch.full((1, 1, max_len, max_len), float("-inf")), diagonal=1),
+            "alibi_slopes",
+            self.get_alibi_slopes(num_heads).view(1, num_heads, 1, 1),
+            persistent=False,
         )
+
+    def get_alibi_slopes(self, num_heads: int):
+        """
+        Returns the ALiBi slopes from the paper.
+        """
+    
+        def get_slopes_power_of_2(n):
+            start = 2 ** (-2 ** -(math.log2(n) - 3))
+            ratio = start
+            return torch.tensor(
+                [start * ratio ** i for i in range(n)],
+                dtype=torch.float32,
+            )
+    
+        if math.log2(num_heads).is_integer():
+            return get_slopes_power_of_2(num_heads)
+    
+        closest_power_of_2 = 2 ** math.floor(math.log2(num_heads))
+    
+        return torch.cat([
+            get_slopes_power_of_2(closest_power_of_2),
+            self.get_alibi_slopes(2 * closest_power_of_2)[0::2][: num_heads - closest_power_of_2],
+        ])
+
 
     def forward(self, x: torch.Tensor):
         batch, seqlen, d_model = x.shape
@@ -85,19 +85,46 @@ class Attention(nn.Module):
         K = K.view(batch, seqlen, self.num_heads, self.head_dim).transpose(1, 2)
         V = V.view(batch, seqlen, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # output = F.scaled_dot_product_attention(
-        #    Q,
-        #    K,
-        #    V,
-        #    attn_mask=None,
-        #    dropout_p=self.attention_dropout.p if self.training else 0.0,
-        #    is_causal=True,
-        # )
-        scores = torch.matmul(Q, K.transpose(2, 3)) / math.sqrt(self.head_dim)
-        scores = scores + self.attention_mask[:, :, :seqlen, :seqlen]
-        scores = F.softmax(scores, dim=-1)
-        scores = self.attention_dropout(scores)
-        output = torch.matmul(scores, V)
+        # ---------------- ALiBi ----------------
+
+        pos = torch.arange(seqlen, device=x.device)
+
+        # distance[i,j] = max(i-j, 0)
+        # | 0 0 0 0 0 0 0 0 |
+        # | 1 0 0 0 0 0 0 0 |
+        # | 2 1 0 0 0 0 0 0 |
+        # | 3 2 1 0 0 0 0 0 |
+        # | 4 3 2 1 0 0 0 0 |
+        # | . 4 3 2 1 0 0 0 |
+        # | . . 4 3 2 1 0 0 |
+        # | P . . 4 3 2 1 0 |
+        
+        distance = (pos[:, None] - pos[None, :]).clamp(min=0)
+
+        # [1, H, L, L]
+        alibi = -self.alibi_slopes * distance
+        
+        # CAUSAL MASK
+        causal_mask = torch.tril(torch.ones(seqlen, seqlen)).bool()
+        
+        combined_mask = alibi.clone()
+        combined_mask = combined_mask.masked_fill(~causal_mask, float("-inf"))
+        # ---------------------------------------
+
+        
+        output = F.scaled_dot_product_attention(
+           Q,
+           K,
+           V,
+           attn_mask=combined_mask,
+           dropout_p=self.attention_dropout.p if self.training else 0.0,
+           is_causal=False,
+        )
+        # scores = torch.matmul(Q, K.transpose(2, 3)) / math.sqrt(self.head_dim)
+        # scores = scores + self.attention_mask[:, :, :seqlen, :seqlen]
+        # scores = F.softmax(scores, dim=-1)
+        # scores = self.attention_dropout(scores)
+        # output = torch.matmul(scores, V)
 
         # [B, L, D_model] <-- [B, L, num_heads, head_dim] <-- [B, num_heads, L, head_dim]
         output = output.transpose(1, 2).contiguous().view(batch, seqlen, -1)
