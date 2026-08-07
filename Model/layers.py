@@ -108,7 +108,7 @@ class Attention(nn.Module):
         causal_mask = torch.tril(torch.ones(seqlen, seqlen)).bool()
         
         combined_mask = alibi.clone()
-        combined_mask = combined_mask.masked_fill(~causal_mask, float("-inf"))
+        combined_mask = combined_mask.to(x.device).masked_fill(~causal_mask.to(x.device), float("-inf"))
         # ---------------------------------------
 
         
@@ -154,7 +154,7 @@ class FeedForward(nn.Module):
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         if self.is_gated:
-            temp = F.silu(self.up_proj(X)) * self.gate_proj(X)
+            temp = F.silu(self.gate_proj(X)) * self.up_proj(X)
         else:
             temp = F.silu(self.up_proj(X))
 
@@ -199,7 +199,6 @@ class Config:
     num_layer: int = 10
     max_len: int = 1024
     vocab_size: int = 30000
-    block_size: int = 1024
 
     d_model: int = 512
     num_heads: int = 8

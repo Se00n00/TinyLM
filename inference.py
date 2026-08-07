@@ -18,7 +18,7 @@ You are a helpful, conversational AI companion. Keep your tone natural, engaging
 """
 
 @torch.no_grad()
-async def generate(model, tokenizer, user_prompt, max_new_tokens, system_prompt:str|None=None, temperature=1.0, top_k=50, top_p=0.9, max_seq_len:int|None=512, device="cpu"):
+async def generate(model, tokenizer, user_prompt, max_new_tokens, system_prompt:str|None=None, temperature=1.0, top_k=50, top_p=0.9, max_seq_len:int|None=40000, device="cpu"):
     """
     Generates text from a prompt using KV caching and sampling.
     """
@@ -29,14 +29,16 @@ async def generate(model, tokenizer, user_prompt, max_new_tokens, system_prompt:
         prompt = user_prompt
     
     # 1. ENCODE PROMPT
-    tokenized = tokenizer.encode(prompt)
-
-    input_ids =tokenized.ids
-    if input_ids[-1] == tokenizer.eos_id:
+    input_ids = tokenizer.encode("<|START|>"+prompt)
+    eos_id = tokenizer.encode(tokenizer.eos_token)[0]
+    bos_id = tokenizer.encode(tokenizer.bos_token)[0]
+    
+    print(max(input_ids))
+    if input_ids[-1] == eos_id:
         input_ids.pop()
 
-    if not input_ids:
-        input_ids = [tokenizer.bos_id]
+    if len(input_ids) == 0:
+        input_ids = [bos_id]
         
     
 
@@ -55,7 +57,7 @@ async def generate(model, tokenizer, user_prompt, max_new_tokens, system_prompt:
         start_time = time.perf_counter()
         num_new_tokens += 1
 
-        logits, _ = model(curr_input, None)
+        logits = model(curr_input, None)
 
         # Take only last position
         logits = logits[:, -1, :]
@@ -103,7 +105,7 @@ async def generate(model, tokenizer, user_prompt, max_new_tokens, system_prompt:
 
         generated.append(next_token_id)
 
-        if next_token_id == tokenizer.eos_id:
+        if next_token_id == eos_id:
             break
 
         curr_input = torch.tensor(
@@ -115,62 +117,37 @@ async def generate(model, tokenizer, user_prompt, max_new_tokens, system_prompt:
             break
             
         end_time = time.perf_counter()
-        yield start_time-end_time, tokenizer.decode([next_token_id])
+        yield start_time-end_time, len(generated), tokenizer.decode([next_token_id])
 
     
     # print("\n\n TOKENS /SEC : ", num_new_tokens / (end_time - start_time))
     # return tokenizer.decode(generated)
 
-from Datasets.tokenizer import BPETokenizer
-from model import Config, Model
-from dataclasses import dataclass, field
-from typing import Literal, Optional
+from transformers import AutoTokenizer
+from Model.layers import Config
+from Model.models import Model
 import asyncio
-
-@dataclass
-class TrainingConfig:
-    # Required Arguments
-    training_name: str
-
-    # Model & Architecture Configuration
-    model: Literal["GPT"] = "GPT"
-    batch_size: int = field(default=8, metadata={"help": "Micro-batch size (reduced to fit in VRAM)"})
-    grad_accum_steps: int = field(default=4, metadata={"help": "Gradient accumulation steps"})
-    max_seq_len: int = field(default=512, metadata={"help": "Maximum Sequence length"})
-
-    # Optimization Parameters
-    learning_rate: float = field(default=3e-4, metadata={"help": "Max learning rate"})
-    weight_decay: float = field(default=0.1, metadata={"help": "Weight Decay rate"})
-
-    # Training Schedule
-    max_steps: int = field(default=20000, metadata={"help": "Total training steps"})
-    warmup_steps: int = field(default=200, metadata={"help": "LR warmup steps"})
-    eval_interval: int = field(default=200, metadata={"help": "Steps between evaluations"})
-    eval_iters: int = field(default=50, metadata={"help": "Evaluation iterations"})
-
-    # Paths & State
-    checkpoint_dir: str = field(default="checkpoints", metadata={"help": "Directory to save model checkpoints"})
-    tokenizer_dir: str = field(default="tokenizer_vocab", metadata={"help": "BPE tokenizer directory"})
-    resume: Optional[str] = field(default=None, metadata={"help": "Path to checkpoint to resume training from (or 'auto')"})
-    pipeline: Literal["PT", "IFT", "PFT"] = field(default="PT", metadata={"help": "Pipeline process: PT, IFT, PFT"})
-
-    # Hardware & Thermal Guardrails
-    vram_limit_mb: int = field(default=14000, metadata={"help": "Target upper limit of VRAM usage in MB"})
-    max_temp: int = field(default=75, metadata={"help": "GPU Temperature threshold to trigger cooldown in °C"})
-    cooldown_temp: int = field(default=60, metadata={"help": "Target GPU Temperature to cool down to in °C"})
-
-    # Performance Flags
-    disable_amp: bool = field(default=False, metadata={"help": "Disable automatic mixed precision (AMP)"})
-    gradient_checkpointing: bool = field(default=False, metadata={"help": "Start training with gradient checkpointing enabled"})
 
 def main():
     parser = argparse.ArgumentParser(description="Generate text using trained 10M GPT-2 or Advanced model.")
-    parser.add_argument("--model", type=str, choices=["GPT"], default="GPT",
+    parser.add_argument("--model", type=str, choices=["GPT","Alibi"], default="GPT",
                         help="Model architecture: GPT")
     parser.add_argument("--checkpoint", type=str, default=None,
                         help="Path to model checkpoint (.pt). If not specified, looks in checkpoints/ directory.")
     parser.add_argument("--prompt", type=str, default="The wikitext dataset contains articles about",
                         help="Prompt to generate text from")
+    parser.add_argument("--training_name", type=str)
+    parser.add_argument(
+        "--pipeline",
+        type=str,
+        choices=[
+            "PT",
+            "IFT",
+            "PFT",
+        ],  # Pre-training, Instruction Finetunning, Preference Fine-Tunning
+        default="PT",
+        help="Pipeline process: pt, it,..",
+    )
     parser.add_argument("--max_new_tokens", type=int, default=100, help="Maximum number of tokens to generate")
     parser.add_argument("--temperature", type=float, default=0.8, help="Temperature (0.0 for greedy)")
     parser.add_argument("--top_k", type=int, default=40, help="Top-k filtering (0 to disable)")
@@ -178,14 +155,8 @@ def main():
     
     args = parser.parse_args()
 
-    TOKENIZER_DIR = "Datasets/sft_tokenizer.json"
-    # Load tokenizer
-    if not os.path.exists(TOKENIZER_DIR):
-        print(f"Error: Tokenizer not found in {TOKENIZER_DIR}. Please run train.py first to build the vocabulary!")
-        sys.exit(1)
-        
-    tokenizer = BPETokenizer(path=TOKENIZER_DIR)
-    vocab_size = tokenizer.vocab_size
+    tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
+    vocab_size = len(tokenizer)
     print(f"Loaded BPE tokenizer. Vocab size = {vocab_size}")
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -194,14 +165,18 @@ def main():
     # Set checkpoint path if not provided
     checkpoint_file = args.checkpoint
     if checkpoint_file is None:
-        checkpoint_file = f"checkpoints/{args.model}_IFT.pt"
+        checkpoint_file = f"checkpoints/{args.training_name}/{args.model}_{args.pipeline}.pt"
 
     # Initialize model
     match args.model:
         case 'GPT':
-            model = Model(Config(vocab_size=tokenizer.vocab_size, block_size=512))
+            model = Model(Config(vocab_size=len(tokenizer), block_size=512))
+        
+        case 'Alibi':
+            model = Model(Config(vocab_size=len(tokenizer)))
+        
         case _:
-            model = Model(Config(vocab_size=tokenizer.vocab_size, block_size=512))
+            model = Model(Config(vocab_size=len(tokenizer), block_size=512))
 
     # Load weights
     if os.path.exists(checkpoint_file):
@@ -218,7 +193,7 @@ def main():
     # print(f"\nGenerating {args.max_new_tokens} tokens with prompt: \"{args.prompt}\"")
     print("-" * 60)
     async def generated():
-        async for time, token in generate(
+        async for time, num, token in generate(
             model=model,
             tokenizer=tokenizer,
             user_prompt=args.prompt,
@@ -229,7 +204,7 @@ def main():
             top_p=args.top_p,
             device=device
         ):
-            print(token,  end=" ", flush=True)
+            print(token,  end="", flush=True)
     
     asyncio.run(generated())
     
