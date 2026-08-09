@@ -342,7 +342,7 @@ class Trainer(ABC):
                 max_seq_len,
                 device,
                 pipeline,
-                rand=True if eval_steps else False,
+                rand=False,
             )
 
             with autocast(device_type=device.type, dtype=torch.float16):
