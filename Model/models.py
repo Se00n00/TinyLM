@@ -27,7 +27,7 @@ class Model(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
     
-    def forward(self, X: torch.Tensor, attention_mask=None):
+    def forward(self, X: torch.Tensor, kv_cahe = None):
         
         X = self.embeddings(X) # [B, L] --> [B, L, D]
         
@@ -43,4 +43,3 @@ class Model(nn.Module):
 # TO-DO
 # [2] Padding Handling
 # [3] Add Option for KV Cache for faster inference
-# [4] Handle Long Generation: 30K

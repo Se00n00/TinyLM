@@ -5,6 +5,7 @@ Datasets/train
 Datasets/test
 Datasets/validation
 Datasets/Tokens
+Datasets/Pre_Training
 
 # Model Checkpoints
 checkpoints/

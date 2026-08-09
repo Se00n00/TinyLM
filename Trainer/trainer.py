@@ -1,6 +1,5 @@
 import argparse
 from Trainer.initiallize import initialize
-
 def parse_arguments():
     parser = argparse.ArgumentParser(description="TinyLLM Trainer")
 
@@ -19,7 +18,7 @@ def parse_arguments():
         "--max_seq_len", type=int, default=512, help="Maximum Sequence length"
     )
     parser.add_argument(
-        "--learning_rate", type=float, default=3e-4, help="Max learning rate"
+        "--learning_rate", type=float, default=0.0, help="Max learning rate"
     )
     parser.add_argument(
         "--weight_decay", type=float, default=0.1, help="Weight Decay rate"
@@ -35,10 +34,7 @@ def parse_arguments():
         "--eval_interval", type=int, default=200, help="Steps between evaluations"
     )
     parser.add_argument(
-        "--log_interval", type=int, default=20, help="Steps between logging: keep less for smooth logging"
-    )
-    parser.add_argument(
-        "--eval_iters", type=int, default=50, help="Evaluation iterations"
+        "--monitor_interval", type=int, default=20, help="Steps between monitor model internals"
     )
     parser.add_argument(
         "--checkpoint_dir",
@@ -104,6 +100,34 @@ def parse_arguments():
     return args
 
 
+# Wikitext-103 for pre-training Experimentations
+DATAPATH = {
+    "train": {
+        "token_path": "Datasets/Pre_Training/dataset_train.bin",
+    },
+    "validation": {
+        "token_path": "Datasets/Pre_Training/dataset_validation.bin",
+    },
+    "test": {
+        "token_path": "Datasets/Pre_Training/dataset_test.bin",
+    }
+}
+
+from Trainer.pretrainer import PreTrainer
 if __name__ == "__main__":
     args = parse_arguments()
     initialize(args)
+    
+    match args.pipeline:
+        case 'PT':
+            print(f"\nStarted Training With {args.pipeline}")
+            trainer = PreTrainer(args)
+            total_time, best_val_loss = trainer.train(dataset= DATAPATH)
+            
+        case _:
+            trainer = PreTrainer(args)
+            print(f"\nStarted Training With Default pre-training Pipeline")
+            total_time, best_val_loss = trainer.train(dataset= DATAPATH)
+
+    print(f"\nTraining finished in {total_time:.2f} minutes.")
+    print(f"Best Validation Loss achieved: {best_val_loss:.4f}")

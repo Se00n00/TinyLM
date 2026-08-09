@@ -10,7 +10,7 @@ import torch.nn.functional as F
 # Instruction Fine-tunning >
 # loss = torch.nn.functional.cross_entropy(X, Y, ignore_index = prompt_tokens_index)
 
-def get_cross_entropy_loss(X:torch.tensor, Y:torch.tensor, pad_index = -100):
+def get_cross_entropy_loss(X:torch.tensor, Y:torch.tensor, pad_index = 60000):
     # X:[B, L, VOCAB_SIZE] --> [B*L, VOCAB_SIZE], Y: [B, L] --> [B*L]
 
     loss = F.cross_entropy(

@@ -43,11 +43,11 @@ def initialize(args):
  
     init_csv(
         f"{args.checkpoint_dir}/{args.training_name}/{args.model}_{args.pipeline}/monitor_train.csv",
-        ["step", "DatasetSim", "loss", "AttentionEntropy"],
+        ["step", "loss", "AttentionEntropy"],
     )
     init_csv(
         f"{args.checkpoint_dir}/{args.training_name}/{args.model}_{args.pipeline}/monitor_validation.csv",
-        ["step", "DatasetSim", "loss", "AttentionEntropy"],
+        ["step", "loss", "AttentionEntropy"],
     )
 
     tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
@@ -67,7 +67,7 @@ def initialize(args):
     if checkpoint_path.is_file():
         print("The file exists.")
     else:
-        torch.save({"model_state_dict": model.state_dict()}, checkpoint_path)
+        torch.save({"model_state_dict": model.state_dict(), "step":-1}, checkpoint_path)
 
     print("\n----------------------------------------------------------------------------")
     print(f"\t\t INITIALLIZATION COMPLETE: {sum(p.numel() for p in model.parameters()) / (1024**2)}M")
