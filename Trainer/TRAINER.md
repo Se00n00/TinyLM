@@ -38,13 +38,37 @@ LOGGING
   ```
 3. Configure Variables to log or monitor in `Trainer/initiallize.py` and `Trainer/pretrainer.py`
 
+### Training
 ```bash
-python train.py \
+python -m Trainer.trainer \
   --training_name Alibi_pretrain \
   --model Alibi \
-  --batch_size 1 \
+  --batch_size 4 \
   --grad_accum_steps 4 \
   --max_seq_len 768 \
   --learning_rate 3e-4 \
   --pipeline PT
 ```
+
+### Inference
+```bash
+python inference.py \
+  --checkpoint checkpoints/Alibi_pretrain/Alibi_PT.pt \
+  --prompt "Explain the concept of neural networks in simple terms." \
+  --temperature 0.7 \
+  --top_k 40 \
+  --top_p 0.9
+```
+
+VLD LOSS: 3.3547
+TEST LOSS: 3.2767431803869607 | TEST PPL: 26.48936099216539
+
+Continuing from step 28601 with best val loss: 3.3547
+
+--------------------------------------------------------------------------
+TOKENS/PARAMS:0.6880443483731362 : TRAIN TOKENS 120130675| VALIDATION TOKENS: 252059 | TOKENS/STEPS: 4096| STEPS/EPOCH: 29329
+DEVICE: cuda MODEL: Alibi| PARAMETERS:78.826171875| BATCH SIZE:2
+----------------------------------------------------------------------------
+
+                                                                                                             
+ TRAIN LOSS: 3.2767431803869607 | TRAIN PPL: 26.48936099216539

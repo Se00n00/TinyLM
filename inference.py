@@ -33,7 +33,6 @@ async def generate(model, tokenizer, user_prompt, max_new_tokens, system_prompt:
     eos_id = tokenizer.encode(tokenizer.eos_token)[0]
     bos_id = tokenizer.encode(tokenizer.bos_token)[0]
     
-    print(max(input_ids))
     if input_ids[-1] == eos_id:
         input_ids.pop()
 
@@ -170,13 +169,13 @@ def main():
     # Initialize model
     match args.model:
         case 'GPT':
-            model = Model(Config(vocab_size=len(tokenizer), block_size=512))
+            model = Model(Config(vocab_size=len(tokenizer)))
         
         case 'Alibi':
             model = Model(Config(vocab_size=len(tokenizer)))
         
         case _:
-            model = Model(Config(vocab_size=len(tokenizer), block_size=512))
+            model = Model(Config(vocab_size=len(tokenizer)))
 
     # Load weights
     if os.path.exists(checkpoint_file):
@@ -202,15 +201,14 @@ def main():
             temperature=args.temperature,
             top_k=args.top_k,
             top_p=args.top_p,
+            max_seq_len= 512,
             device=device
         ):
             print(token,  end="", flush=True)
     
     asyncio.run(generated())
     
-    # print(output_text)
-    print("\n")
-    print("-" * 60)
+    print("\n","-" * 60)
 
 if __name__ == "__main__":
     main()

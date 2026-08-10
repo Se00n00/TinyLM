@@ -147,183 +147,184 @@ class PreTrainer(Trainer):
         print(
             "----------------------------------------------------------------------------\n"
         )
-
+        
+        
         t0 = time.time()
-        pbar1 = tqdm(total=steps_per_epoch, desc="Train")
-        while step < steps_per_epoch:
-            self.check_and_cooldown_gpu(self.args.max_temp, self.args.cooldown_temp)
-            lr = get_lr(
-                step, steps_per_epoch, self.args.learning_rate, self.args.warmup_steps
-            )
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = lr
+        # pbar1 = tqdm(total=steps_per_epoch, desc="Train")
+        # while step < steps_per_epoch:
+        #     self.check_and_cooldown_gpu(self.args.max_temp, self.args.cooldown_temp)
+        #     lr = get_lr(
+        #         step, steps_per_epoch, self.args.learning_rate, self.args.warmup_steps
+        #     )
+        #     for param_group in optimizer.param_groups:
+        #         param_group["lr"] = lr
 
-            t_start = time.time()
-            step_completed = False
+        #     t_start = time.time()
+        #     step_completed = False
 
-            while not step_completed:
-                torch.cuda.empty_cache()
+        #     while not step_completed:
+        #         torch.cuda.empty_cache()
 
-                try:
-                    optimizer.zero_grad(set_to_none=True)
-                    loss_accum = 0.0
+        #         try:
+        #             optimizer.zero_grad(set_to_none=True)
+        #             loss_accum = 0.0
 
-                    self.check_vram_limit(self.args.vram_limit_mb, device)
-                    skipped_batch = 0
-                    for micro_step in range(GRAD_ACCUM_STEPS):
-                        global_micro_step = step * GRAD_ACCUM_STEPS + micro_step
+        #             self.check_vram_limit(self.args.vram_limit_mb, device)
+        #             skipped_batch = 0
+        #             for micro_step in range(GRAD_ACCUM_STEPS):
+        #                 global_micro_step = step * GRAD_ACCUM_STEPS + micro_step
 
-                        batch = self.get_batch(
-                            global_micro_step,
-                            Data["train"],
-                            train_len,
-                            BATCH_SIZE,
-                            self.args.max_seq_len,
-                            device,
-                            self.args.pipeline,
-                        )
+        #                 batch = self.get_batch(
+        #                     global_micro_step,
+        #                     Data["train"],
+        #                     train_len,
+        #                     BATCH_SIZE,
+        #                     self.args.max_seq_len,
+        #                     device,
+        #                     self.args.pipeline,
+        #                 )
 
-                        with autocast(device_type=device.type, dtype=ptdtype):
-                            logits = model(batch["inputs"])
-                            loss = get_cross_entropy_loss(logits, batch["labels"])
+        #                 with autocast(device_type=device.type, dtype=ptdtype):
+        #                     logits = model(batch["inputs"])
+        #                     loss = get_cross_entropy_loss(logits, batch["labels"])
 
-                        loss = loss / (GRAD_ACCUM_STEPS - skipped_batch)
+        #                 loss = loss / (GRAD_ACCUM_STEPS - skipped_batch)
 
-                        if torch.isnan(loss):
-                            print("NaN loss encountered, skipping batch")
-                            optimizer.zero_grad(set_to_none=True)
-                            continue
+        #                 if torch.isnan(loss):
+        #                     print("NaN loss encountered, skipping batch")
+        #                     optimizer.zero_grad(set_to_none=True)
+        #                     continue
 
-                        loss_accum += loss.item()
+        #                 loss_accum += loss.item()
 
-                        if ptdtype == torch.float16:
-                            scaler.scale(loss).backward()
-                        else:
-                            loss.backward()
+        #                 if ptdtype == torch.float16:
+        #                     scaler.scale(loss).backward()
+        #                 else:
+        #                     loss.backward()
 
-                    if ptdtype == torch.float16:
-                        scaler.unscale_(optimizer)
-                        grad_norm = torch.nn.utils.clip_grad_norm_(
-                            model.parameters(), 1.0
-                        )
-                        scaler.step(optimizer)
-                        scaler.update()
-                    else:
-                        grad_norm = torch.nn.utils.clip_grad_norm_(
-                            model.parameters(), 1.0
-                        )
-                        optimizer.step()
+        #             if ptdtype == torch.float16:
+        #                 scaler.unscale_(optimizer)
+        #                 grad_norm = torch.nn.utils.clip_grad_norm_(
+        #                     model.parameters(), 1.0
+        #                 )
+        #                 scaler.step(optimizer)
+        #                 scaler.update()
+        #             else:
+        #                 grad_norm = torch.nn.utils.clip_grad_norm_(
+        #                     model.parameters(), 1.0
+        #                 )
+        #                 optimizer.step()
 
-                    step_completed = True
+        #             step_completed = True
 
-                except RuntimeError as e:
-                    err_msg = str(e).lower()
-                    if (
-                        "out of memory" in err_msg
-                        or "memory limit" in err_msg
-                        or "allowed memory" in err_msg
-                    ):
-                        print(
-                            f"\n[Memory Guard] CUDA OOM or limit exceeded at step {step} with batch_size={BATCH_SIZE}, grad_accum_steps={GRAD_ACCUM_STEPS}."
-                        )
-                        optimizer.zero_grad(set_to_none=True)
-                        torch.cuda.empty_cache()
+        #         except RuntimeError as e:
+        #             err_msg = str(e).lower()
+        #             if (
+        #                 "out of memory" in err_msg
+        #                 or "memory limit" in err_msg
+        #                 or "allowed memory" in err_msg
+        #             ):
+        #                 print(
+        #                     f"\n[Memory Guard] CUDA OOM or limit exceeded at step {step} with batch_size={BATCH_SIZE}, grad_accum_steps={GRAD_ACCUM_STEPS}."
+        #                 )
+        #                 optimizer.zero_grad(set_to_none=True)
+        #                 torch.cuda.empty_cache()
 
-                        if BATCH_SIZE > 1:
-                            old_bs = BATCH_SIZE
-                            BATCH_SIZE = max(1, BATCH_SIZE // 2)
-                            GRAD_ACCUM_STEPS = EFFECTIVE_BATCH_SIZE // BATCH_SIZE
-                            print(
-                                f"  [Memory Guard] Halving micro-batch size: {old_bs} -> {BATCH_SIZE}. Increasing grad_accum_steps to {GRAD_ACCUM_STEPS}."
-                            )
-                        elif not getattr(model, "gradient_checkpointing", False):
-                            print(
-                                "  [Memory Guard] Micro-batch size is already 1. Enabling gradient checkpointing to save memory..."
-                            )
-                            model.gradient_checkpointing = True
-                            # Reset batch size to original/default to try to recover with checkpointing
-                            BATCH_SIZE = self.args.batch_size
-                            GRAD_ACCUM_STEPS = self.args.grad_accum_steps
-                        else:
-                            print(
-                                "  [Memory Guard] Out of memory even with micro-batch size 1 and gradient checkpointing active."
-                            )
-                            raise e
-                    else:
-                        raise e
+        #                 if BATCH_SIZE > 1:
+        #                     old_bs = BATCH_SIZE
+        #                     BATCH_SIZE = max(1, BATCH_SIZE // 2)
+        #                     GRAD_ACCUM_STEPS = EFFECTIVE_BATCH_SIZE // BATCH_SIZE
+        #                     print(
+        #                         f"  [Memory Guard] Halving micro-batch size: {old_bs} -> {BATCH_SIZE}. Increasing grad_accum_steps to {GRAD_ACCUM_STEPS}."
+        #                     )
+        #                 elif not getattr(model, "gradient_checkpointing", False):
+        #                     print(
+        #                         "  [Memory Guard] Micro-batch size is already 1. Enabling gradient checkpointing to save memory..."
+        #                     )
+        #                     model.gradient_checkpointing = True
+        #                     # Reset batch size to original/default to try to recover with checkpointing
+        #                     BATCH_SIZE = self.args.batch_size
+        #                     GRAD_ACCUM_STEPS = self.args.grad_accum_steps
+        #                 else:
+        #                     print(
+        #                         "  [Memory Guard] Out of memory even with micro-batch size 1 and gradient checkpointing active."
+        #                     )
+        #                     raise e
+        #             else:
+        #                 raise e
 
-            pbar1.update(1)
-            t_end = time.time()
-            step_time_ms = (t_end - t_start) * 1000
+        #     pbar1.update(1)
+        #     t_end = time.time()
+        #     step_time_ms = (t_end - t_start) * 1000
 
-            # Evaluate
-            if step % self.args.eval_interval == 0 or step == steps_per_epoch - 1:
-                val_loss = self.evaluate_loss(
-                    model,
-                    self.args.model,
-                    self.args.checkpoint_dir,
-                    Data["validation"],
-                    val_len,
-                    1,
-                    self.args.max_seq_len,
-                    device,
-                    self.args.pipeline,
-                )
-                val_ppl = math.exp(val_loss) if val_loss < 1000 else float("inf")
-                train_ppl = math.exp(loss_accum) if loss_accum < 1000 else float("inf")
+        #     # Evaluate
+        #     if step % self.args.eval_interval == 0 or step == steps_per_epoch - 1:
+        #         val_loss = self.evaluate_loss(
+        #             model,
+        #             self.args.model,
+        #             self.args.checkpoint_dir,
+        #             Data["validation"],
+        #             val_len,
+        #             1,
+        #             self.args.max_seq_len,
+        #             device,
+        #             self.args.pipeline,
+        #         )
+        #         val_ppl = math.exp(val_loss) if val_loss < 1000 else float("inf")
+        #         train_ppl = math.exp(loss_accum) if loss_accum < 1000 else float("inf")
                 
-                allocated_mb = (
-                    torch.cuda.memory_allocated(device) / (1024 * 1024)
-                    if device.type == "cuda"
-                    else 0.0
-                )
-                temp_str = (
-                    f" | Temp: {self.get_gpu_temperature()}°C"
-                    if self.get_gpu_temperature() is not None
-                    else ""
-                )
-                # logger.info(
-                #     f"Step {step:4d}/{steps_per_epoch:4d} | "
-                #     f"Train Loss: {loss_accum:.4f} (PPL: {train_ppl:.2f}) | "
-                #     f"Val Loss: {val_loss:.4f} (PPL: {val_ppl:.2f}) | "
-                #     f"LR: {lr:.2e} | "
-                #     f"Grad Norm: {grad_norm:.2f} | "
-                #     f"Step Time: {step_time_ms:.1f}ms | "
-                #     f"VRAM: {allocated_mb:.1f}MB" + temp_str
-                # )
+        #         allocated_mb = (
+        #             torch.cuda.memory_allocated(device) / (1024 * 1024)
+        #             if device.type == "cuda"
+        #             else 0.0
+        #         )
+        #         temp_str = (
+        #             f" | Temp: {self.get_gpu_temperature()}°C"
+        #             if self.get_gpu_temperature() is not None
+        #             else ""
+        #         )
+        #         # logger.info(
+        #         #     f"Step {step:4d}/{steps_per_epoch:4d} | "
+        #         #     f"Train Loss: {loss_accum:.4f} (PPL: {train_ppl:.2f}) | "
+        #         #     f"Val Loss: {val_loss:.4f} (PPL: {val_ppl:.2f}) | "
+        #         #     f"LR: {lr:.2e} | "
+        #         #     f"Grad Norm: {grad_norm:.2f} | "
+        #         #     f"Step Time: {step_time_ms:.1f}ms | "
+        #         #     f"VRAM: {allocated_mb:.1f}MB" + temp_str
+        #         # )
                 
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
-                    checkpoint_path = os.path.join(
-                        self.args.checkpoint_dir,
-                        f"{self.args.model}_{self.args.pipeline}.pt",
-                    )
-                    torch.save(
-                        {
-                            "step": step,
-                            "model_state_dict": model.state_dict(),
-                            "optimizer_state_dict": optimizer.state_dict(),
-                            "val_loss": val_loss,
-                            "args": self.args,
-                            "run_meta": run_meta,
-                        },
-                        checkpoint_path,
-                    )
-                    # logger.info(
-                    #     f"  [Checkpoint] Saved best {self.args.model} model to {checkpoint_path} (Val Loss: {val_loss:.4f})"
-                    # )
-                    # ----------------------------------------------------------------
-                    # LOGGING SECTION
-                    # ----------------------------------------------------------------
-                    self.log_metrics(
-                        f"{self.args.checkpoint_dir}/{self.args.training_name}/{self.args.model}_{self.args.pipeline}/logs_train.csv",
-                        [step, loss_accum, val_ppl, lr, grad_norm.item() ],
-                    )
-                    self.log_metrics(
-                        f"{self.args.checkpoint_dir}/{self.args.training_name}/{self.args.model}_{self.args.pipeline}/logs_validation.csv",
-                        [step, val_loss, train_ppl, lr, grad_norm.item() ],
-                    )
-            step += 1
+        #         if val_loss < best_val_loss:
+        #             best_val_loss = val_loss
+        #             checkpoint_path = os.path.join(
+        #                 self.args.checkpoint_dir,
+        #                 f"{self.args.training_name}/{self.args.model}_{self.args.pipeline}.pt",
+        #             )
+        #             torch.save(
+        #                 {
+        #                     "step": step,
+        #                     "model_state_dict": model.state_dict(),
+        #                     "optimizer_state_dict": optimizer.state_dict(),
+        #                     "val_loss": val_loss,
+        #                     "args": self.args,
+        #                     "run_meta": run_meta,
+        #                 },
+        #                 checkpoint_path,
+        #             )
+        #             # logger.info(
+        #             #     f"  [Checkpoint] Saved best {self.args.model} model to {checkpoint_path} (Val Loss: {val_loss:.4f})"
+        #             # )
+        #             # ----------------------------------------------------------------
+        #             # LOGGING SECTION
+        #             # ----------------------------------------------------------------
+        #             self.log_metrics(
+        #                 f"{self.args.checkpoint_dir}/{self.args.training_name}/{self.args.model}_{self.args.pipeline}/logs_train.csv",
+        #                 [step, loss_accum, val_ppl, lr, grad_norm.item() ],
+        #             )
+        #             self.log_metrics(
+        #                 f"{self.args.checkpoint_dir}/{self.args.training_name}/{self.args.model}_{self.args.pipeline}/logs_validation.csv",
+        #                 [step, val_loss, train_ppl, lr, grad_norm.item() ],
+        #             )
+        #     step += 1
             # if step % self.args.monitor_interval == 0 or step == steps_per_epoch - 1:
             #     self.log_metrics(
             #         f"{self.args.checkpoint_dir}/{self.args.training_name}/{self.args.model}_{self.args.pipeline}/logs_train.csv",
@@ -344,9 +345,9 @@ class PreTrainer(Trainer):
             self.args.max_seq_len,
             device,
             "PT",
-            desc= "Train"
+            desc= "Test"
         )
         test_ppl = math.exp(test_loss) if test_loss < 1000 else float("inf")
-        print(f"\n TRAIN LOSS: {test_loss} | TRAIN PPL: {test_ppl}")
+        print(f"\n TEST LOSS: {test_loss} | TEST PPL: {test_ppl}")
         total_time_min = (time.time() - t0) / 60
         return total_time_min, best_val_loss
