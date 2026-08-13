@@ -1,4 +1,3 @@
-
 from trainer import SFTConfig, SFTTrainer
 from transformers import AutoTokenizer
 from datasets import load_dataset
@@ -15,10 +14,10 @@ if __name__ == '__main__':
     model = Model(Config(vocab_size=len(tokenizer)))
 
     trainer = SFTTrainer(
-        training_name="Train",
+        training_name="Example_PT",
         model=model,
         tokenizer= tokenizer,
-        ds=load_dataset("Se00n00/FineWeb-1B", split="train", streaming=True),
+        ds=load_dataset("Se00n00/FineWeb-1B", split="train", streaming=True).take(1200),
         config = SFTConfig(total_samples=total_samples)
     )
     

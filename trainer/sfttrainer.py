@@ -1,7 +1,127 @@
+"""
+CHAT TEMPLATES
+-------------------------
+For Text Genration
+-------------------------
+"messages": {"text": ...}
+-------------------------
+Instruction Fine Tunning
+-------------------------
+"messages":[
+    {
+        "role":"system",
+        "content":"..."
+    },
+    {
+        "role":"user",
+        "content":"..."
+    },
+    {
+        "role":"assistant",
+        "content": "..."
+    }
+]
+-------------------------
+Reasoning Fine Tunning
+-------------------------
+"messages":[
+    {
+        "role":"system",
+        "content":"..."
+    },
+    {
+        "role":"user",
+        "content":"..."
+    },
+    {
+        "role":"assistant",
+        "content": "<|THINK|> ... <|THINK|> ..."
+    }
+]
+-------------------------
+Tool Calling
+-------------------------
+"messages":[{
+    "available_tools": [
+        {
+            "name": "get_weather",
+            "description": "Get the current weather for a city.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "Name of the city."
+                    }
+                },
+                "required": ["city"]
+            }
+        }
+    ],
+    "system": "...",
+    "user":"...",
+    "assisstant": ".. <|TOOL_CALLS|>[
+        {
+            "name": "...",
+            "arguments":{
+                "expression":"..."
+            }
+        }
+    ]<|/TOOL_CALLS|> ..."
+}]
+
+---------------------------
+Tool Calling + Reasoning
+---------------------------
+"messages":[
+    {
+        "role":"available_tools",
+        "content":[
+            {
+                "name": "get_weather",
+                "description": "Get the current weather for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "Name of the city."
+                        }
+                    },
+                    "required": ["city"]
+                }
+            }
+        ]
+    },
+    {
+        "role": "system",
+        "content":"...",
+    },
+    {
+        "role": "user",
+        "content": "..."
+    },
+    {
+        "role":"assistant",
+        "content": "<|THINK|> ... <|/THINK|> ... <|TOOL_CALLS|>[
+            {
+                "name": "...",
+                "arguments":{
+                    "expression":"..."
+                }
+            }
+        ]<|/TOOL_CALLS|> ... "
+    }
+]
+
+"""
+
 from ast import Pass
 import time
 from dataclasses import dataclass
 import os
+import csv
+from pathlib import Path
 import datasets
 import torch
 import math
@@ -18,28 +138,41 @@ from .util import get_lr
 
 @dataclass
 class SFTConfig:
+    # MISC
     total_samples:int
-    logging_steps: int = 10
-    gradient_checkpointing: bool = True
-    learning_rate: float = 2e-5
     test_train_ratio: float = 0.1
-    max_length: int = 512
-    chat_template: str | None = None
-    grad_accum_steps: int = 1
-    ptdtype = torch.float16
-    batch_size: int = 10
-    warmup_steps_ratio:float = 0.10 # 10 % of total steps
-    eval_steps:int = 200
-    weight_decay:float = 0.1
-    resume:str | None = None
-    vram_limit_mb:int = 4000
-    checkpoint_dir:str = "checkpoint"
-    
-    max_temp:int = 75
-    cooldown_temp:int =  65
+    min_lr_ratio = 0.8
     max_test_rows = 10000
     label_idx = -100
 
+    # LEARNING PARAMETERS 
+    batch_size: int = 2
+    grad_accum_steps: int = 4
+    warmup_steps_ratio:float = 0.10 # 10 % of total steps
+    checkpoint_dir:str = "checkpoints"
+    resume:str | None = None
+    resum_same_dataset:bool = False
+    learning_rate: float = 2e-5
+    
+    # LOGGING & EVALUATION
+    logging_steps: int = 10
+    eval_steps:int = 200
+    
+    # MODEL PARAMTERS
+    max_length: int = 512
+    ptdtype = torch.float16
+    
+    # MEMORY MANAGEMENT
+    vram_limit_mb:int = 4000
+    max_temp:int = 75
+    cooldown_temp:int = 60
+    
+    # TRAINING
+    gradient_checkpointing: bool = True
+    weight_decay:float = 0.1
+    
+    # Trainer Variable [should be put into SFTTrainer init]
+    current_example = 0 
 
 class SFTTrainer(Trainer):
     def __init__(
@@ -54,12 +187,14 @@ class SFTTrainer(Trainer):
         self.config = config
         self.model = model
         self.tokenizer = tokenizer
+        
 
         if isinstance(ds, Dataset):
             Data = ds.train_test_split(test_size=config.test_train_ratio)
             train_data = Data["train"]
             test_data = Data["test"]
             self.test_samples = test_data.num_rows
+            self.iterable_train_data = False
 
         else:
             self.test_samples = int(config.total_samples * config.test_train_ratio)
@@ -69,14 +204,10 @@ class SFTTrainer(Trainer):
 
             test_data = Dataset.from_generator(lambda: (item for item in test_))
 
-        self.data_type = type(train_data)
+            self.iterable_train_data = True
         self.train_data = train_data
         self.test_data = test_data
-        # self.train_dataloader = DataLoader(train, config.batch_size)
-        # self.test_dataloader = DataLoader(test, config.batch_size)
 
-        #
-        #
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
             weight_decay=self.config.weight_decay,
@@ -85,9 +216,25 @@ class SFTTrainer(Trainer):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.scaler = torch.amp.GradScaler(self.device.type, enabled=(self.config.ptdtype == torch.float16))
         
+        # Initiallize .csv files for Logging
+        self.init_csv(
+            f"{config.checkpoint_dir}/{training_name}/logs_train.csv",
+            ["step", "num_examples", "loss", "perplexity", "entropy", "mean_token_accuracy", "learning_rate", "GNorm"],
+        )
+        self.init_csv(
+            f"{config.checkpoint_dir}/{training_name}/logs_validation.csv",
+            ["step", "num_examples", "loss", "perplexity", "entropy", "mean_token_accuracy"],
+        )
+
+    def init_csv(self, csv_path, cols):
+        if not Path(csv_path).exists():
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(cols)
+                
     def train(self):
         super().train()
-        
+        self.model.to(self.device)
         BATCH_SIZE = self.config.batch_size
         GRAD_ACCUM_STEPS = self.config.grad_accum_steps
         EFFECTIVE_BATCH_SIZE = BATCH_SIZE * GRAD_ACCUM_STEPS
@@ -95,6 +242,11 @@ class SFTTrainer(Trainer):
         num_params = sum(p.numel() for p in self.model.parameters())
 
         step = 0
+        loss_accum = float("inf")
+        lr = 0
+        grad_norm = torch.tensor(0.0)
+        entropy, mean_token_accuracy = 0, 0
+        
         if self.config.resume:
             resume_path = self.config.resume
             
@@ -116,7 +268,10 @@ class SFTTrainer(Trainer):
                         if isinstance(v, torch.Tensor):
                             state[k] = v.to(self.device)
 
-                self.step = checkpoint.get("step", 0) + 1
+                step = checkpoint.get("step", 0) + 1
+                if self.config.resum_same_dataset == False:
+                    step = 0
+                    
                 self.best_val_loss = checkpoint.get("val_loss", float("inf"))
         
             else:
@@ -128,17 +283,17 @@ class SFTTrainer(Trainer):
         t_initial = time.time()
 
         try:
-            total_iterations = (
-                self.config.total_samples
-                // (BATCH_SIZE * self.config.max_length * GRAD_ACCUM_STEPS)
-            )
+            total_iterations = self.config.total_samples
+            
+            if self.config.resum_same_dataset == False and self.config.resume == True:
+                self.config.current_example = int(total_iterations * self.config.warmup_steps_ratio)
+                
             
             run_meta = {
                 "vocab_size": len(self.tokenizer),
                 "batch_size": self.config.batch_size,
                 "max_seq_len": self.config.max_length,
                 "learning_rate": self.config.learning_rate,
-                "max_steps": total_iterations,
             }
             print(
                 "\n--------------------------------------------------------------------------"
@@ -149,11 +304,18 @@ class SFTTrainer(Trainer):
             print(
                 "----------------------------------------------------------------------------\n"
             )
-            train_bar = tqdm(total=total_iterations, desc="Training", dynamic_ncols=True)
-            while step < total_iterations:
+            train_bar = tqdm(desc="Training", dynamic_ncols=True)
+            
+            # ---------------------------------------------
+            # TRAIN LOOP
+            # ---------------------------------------------
+            
+            Batches = iter(self.get_batch(self.train_data, streaming=self.iterable_train_data))
+            EPOCH_COMPLETED = False
+            while not EPOCH_COMPLETED:
                 self.check_and_cooldown_gpu(self.config.max_temp, self.config.cooldown_temp)
                 lr = get_lr(
-                    step, total_iterations, self.config.learning_rate, int(total_iterations * self.config.warmup_steps_ratio)
+                    self.config.current_example, total_iterations, self.config.learning_rate, int(total_iterations * self.config.warmup_steps_ratio), self.config.min_lr_ratio
                 )
                 for param_group in self.optimizer.param_groups:
                     param_group["lr"] = lr
@@ -165,33 +327,42 @@ class SFTTrainer(Trainer):
                     torch.cuda.empty_cache()
                     self.optimizer.zero_grad(set_to_none=True)
                     loss_accum = 0.0
+                    entropy_accum = 0.0
+                    accuracy_accum = 0.0
 
                     self.check_vram_limit(self.config.vram_limit_mb, self.device)
 
                     for micro_step in range(GRAD_ACCUM_STEPS):
+                        
                         global_micro_step = step * GRAD_ACCUM_STEPS + micro_step
                         
-                        # TODO: GET BATCH
-                        # 
-                        # 
-                        # 
-                        # 
-                        batch = {
-                            "data": [],
-                            "labels": []
-                        }
+                        batch = next(Batches, None)
+                        if batch is None:
+                            EPOCH_COMPLETED = True
+                            break
+                            
                         with autocast(device_type=self.device.type, dtype=self.config.ptdtype):
-                            logits = self.model(batch["data"])
-                            loss = F.cross_entropy(
-                                logits.view(-1, logits.size(-1)), batch['labels'].view(-1), ignore_index=-100
+                            batch_x = batch["data"].to(self.device, non_blocking=True)
+                            batch_y = batch["labels"].to(self.device, non_blocking=True)
+                            
+                            logits = self.model(batch_x)
+                            raw_loss = F.cross_entropy(
+                                logits.view(-1, logits.size(-1)), batch_y.view(-1), ignore_index=self.config.label_idx
                             )
-                        loss = loss / GRAD_ACCUM_STEPS
-                        if torch.isnan(loss):
-                            print("NaN loss encountered, skipping batch")
-                            self.optimizer.zero_grad(set_to_none=True)
-                            continue
+                            batch_entropy, batch_accuracy = self.get_entropy_and_mean_token_accuracy(logits, batch_y, self.config.label_idx)
                         
-                        loss_accum += loss.item()
+                        
+                        if not torch.isfinite(raw_loss):
+                            print("Non-finite loss encountered.")
+                            self.optimizer.zero_grad(set_to_none=True)
+                            step_completed = False
+                            break
+                    
+                        loss_accum += raw_loss.item()
+                        entropy_accum += batch_entropy
+                        accuracy_accum += batch_accuracy
+
+                        loss = raw_loss / GRAD_ACCUM_STEPS
 
                         if self.config.ptdtype == torch.float16:
                             self.scaler.scale(loss).backward()
@@ -199,17 +370,23 @@ class SFTTrainer(Trainer):
                             loss.backward()
                         
                         consumed += 1
+                    
+                    loss_accum /= GRAD_ACCUM_STEPS
+                    entropy = entropy_accum / GRAD_ACCUM_STEPS
+                    mean_token_accuracy = accuracy_accum / GRAD_ACCUM_STEPS
+                
                     if self.config.ptdtype == torch.float16:
                         self.scaler.unscale_(self.optimizer)
-                        grad_norm = torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), 1.0
-                        )
+                
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(),
+                        1.0,
+                    )
+
+                    if self.config.ptdtype == torch.float16:
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                     else:
-                        grad_norm = torch.nn.utils.clip_grad_norm_(
-                            self.model.parameters(), 1.0
-                        )
                         self.optimizer.step()
                     
                     step_completed = True
@@ -222,96 +399,99 @@ class SFTTrainer(Trainer):
     
                     train_bar.set_postfix(
                         {
-                            "buffer": BUFFER.qsize(),
                             "batch/s": f"{batches_per_second:.2f}",
                         }
                     )
             
-            if step % self.config.eval_steps == 0 or step == total_iterations - 1:
-                self.model.eval()
-                total_eval_loss = 0.0
-                
-                test_steps = self.test_samples // (BATCH_SIZE, self.config.max_length)
-                for step in tqdm(range(10), desc="Validation", leave = False):
-                    # TODO: GET BATCH
-                    # 
-                    # 
-                    # 
-                    # 
-                    get_batch(
-                        streaming = False if isinstance(self.data_type, Dataset) else True
-                    )
-                    batch = {
-                        "data": [],
-                        "labels": []
-                    }
+                # -------------------------------------------------------
+                # EVAL STEP
+                # -------------------------------------------------------
+                if step % self.config.eval_steps == 0 or (EPOCH_COMPLETED == True):
+                    self.model.eval()
+                    total_eval_loss = 0.0
+                    val_entropy, val_mean_token_accuracy = 0,0
+                    eval_steps = 0
                     
-                    with autocast(device_type=self.device.type, dtype=torch.float16):
-                        logits = self.model(batch["data"])
-                        loss = F.cross_entropy(
-                            logits.view(-1, logits.size(-1)), batch['labels'].view(-1), ignore_index=-100
-                        )
-        
-                    total_eval_loss += loss.item()
+                    for batch in tqdm(self.get_batch(self.test_data, streaming=False), desc="Validation"):
+                        batch_x = batch["data"].to(self.device, non_blocking=True)
+                        batch_y = batch["labels"].to(self.device, non_blocking=True)
+                        
+                        with autocast(device_type=self.device.type, dtype=torch.float16):
+                            logits = self.model(batch_x)
+                            loss = F.cross_entropy(
+                                logits.view(-1, logits.size(-1)), batch_y.view(-1), ignore_index=self.config.label_idx
+                            )
+                            batch_entropy,batch_mean_token_accuracy = self.get_entropy_and_mean_token_accuracy(logits, batch_y, self.config.label_idx)
+                        
+                            val_entropy += batch_entropy
+                            val_mean_token_accuracy += batch_mean_token_accuracy
+                        
+                        total_eval_loss += loss.item()
+                        eval_steps += 1
+                        
                     
-                val_loss = total_eval_loss / eval_steps
-                val_ppl = math.exp(val_loss) if val_loss < 1000 else float("inf")
-                train_ppl = math.exp(loss_accum) if loss_accum < 1000 else float("inf")
-                self.model.train()
-                
-                allocated_mb = (
-                    torch.cuda.memory_allocated(self.device) / (1024 * 1024)
-                    if self.device.type == "cuda"
-                    else 0.0
-                )
-                temp_str = (
-                    f" | Temp: {self.get_gpu_temperature()}°C"
-                    if self.get_gpu_temperature() is not None
-                    else ""
-                )
-                tqdm.write(
-                    f"Step {self.step:4d}/{steps_per_epoch:4d} | "
-                    f"Train Loss: {loss_accum:.4f} (PPL: {train_ppl:.2f}) | "
-                    f"Val Loss: {val_loss:.4f} (PPL: {val_ppl:.2f}) | "
-                    f"LR: {lr:.2e} | "
-                    f"Grad Norm: {grad_norm:.2f} | "
-                    f"Step Time: {step_time_ms:.1f}ms | "
-                    f"VRAM: {allocated_mb:.1f}MB" + temp_str
-                )
-                
-                if val_loss < self.best_val_loss:
-                    self.best_val_loss = val_loss
-                    checkpoint_path = os.path.join(
-                        self.config.checkpoint_dir,
-                        f"{self.training_name}/model.pt",
+                    val_entropy = val_entropy / eval_steps
+                    val_mean_token_accuracy = val_mean_token_accuracy / eval_steps
+                    val_loss = total_eval_loss / eval_steps
+                    val_ppl = math.exp(val_loss) if val_loss < 1000 else float("inf")
+                    train_ppl = math.exp(loss_accum) if loss_accum < 1000 else float("inf")
+                    self.model.train()
+                    
+                    allocated_mb = (
+                        torch.cuda.memory_allocated(self.device) / (1024 * 1024)
+                        if self.device.type == "cuda"
+                        else 0.0
                     )
-                    torch.save(
-                        {
-                            "step": self.step,
-                            "model_state_dict": self.model.state_dict(),
-                            "optimizer_state_dict": self.optimizer.state_dict(),
-                            "run_meta": run_meta,
-                        },
-                        checkpoint_path,
+                    temp_str = (
+                        f" | Temp: {self.get_gpu_temperature()}°C"
+                        if self.get_gpu_temperature() is not None
+                        else ""
                     )
                     tqdm.write(
-                        f"  [Checkpoint] Saved best model to {checkpoint_path} (Val Loss: {val_loss:.4f})"
+                        f"Step {step:4d} | "
+                        f"Train Loss: {loss_accum:.4f} (PPL: {train_ppl:.2f}) | "
+                        f"Val Loss: {val_loss:.4f} (PPL: {val_ppl:.2f}) | "
+                        f"LR: {lr:.2e} | "
+                        f"Grad Norm: {grad_norm:.2f} | "
+                        f"Step Time: {elapsed * 1000:.1f}ms | "
+                        f"VRAM: {allocated_mb:.1f}MB" + temp_str
                     )
                     
-                self.log_metrics(
-                    f"{self.config.checkpoint_dir}/{self.training_name}/logs_validation.csv",
-                    [self.step, val_loss, val_ppl, lr, grad_norm.item() ],
-                )
+                    if val_loss < self.best_val_loss:
+                        self.best_val_loss = val_loss
+                        checkpoint_path = os.path.join(
+                            self.config.checkpoint_dir,
+                            f"{self.training_name}/model.pt",
+                        )
+                        torch.save(
+                            {
+                                "step": step,
+                                "model_state_dict": self.model.state_dict(),
+                                "optimizer_state_dict": self.optimizer.state_dict(),
+                                "run_meta": run_meta,
+                            },
+                            checkpoint_path,
+                        )
+                        tqdm.write(
+                            f"  [Checkpoint] Saved best model to {checkpoint_path} (Val Loss: {val_loss:.4f})"
+                        )
+                    
+                    # TRAINING LOGGING: STEP, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY
+                    self.log_metrics(
+                        f"{self.config.checkpoint_dir}/{self.training_name}/logs_validation.csv",
+                        [step, self.config.current_example * BATCH_SIZE *self.config.max_length, val_loss, val_ppl, val_entropy, val_mean_token_accuracy ],
+                    )
                 
-            if step % self.config.logging_steps == 0 or step == total_iterations - 1:
-                train_ppl = math.exp(loss_accum) if loss_accum < 1000 else float("inf")
-                
-                self.log_metrics(
-                    f"{self.config.checkpoint_dir}/{self.training_name}/logs_train.csv",
-                    [self.step, self.step* BATCH_SIZE *self.config.max_length,  loss_accum, train_ppl, lr, grad_norm.item() ],
-                )
-                
-            step += 1
+                # TRAINING LOGGING: STEP, NUM_TOKENS, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY, LR, GRAD_NORM
+                if step % self.config.logging_steps == 0 or (EPOCH_COMPLETED == True):
+                    train_ppl = math.exp(loss_accum) if loss_accum < 1000 else float("inf")
+                    
+                    self.log_metrics(
+                        f"{self.config.checkpoint_dir}/{self.training_name}/logs_train.csv",
+                        [step, self.config.current_example * BATCH_SIZE *self.config.max_length,  loss_accum, train_ppl, entropy, mean_token_accuracy, lr, grad_norm.item() ],
+                    )
+                    
+                step += 1
         except RuntimeError as e:
             err_msg = str(e).lower()
             if (
@@ -320,7 +500,7 @@ class SFTTrainer(Trainer):
                 or "allowed memory" in err_msg
             ):
                 print(
-                    f"\n[Memory Guard] CUDA OOM or limit exceeded at step {self.step} with batch_size={BATCH_SIZE}, grad_accum_steps={GRAD_ACCUM_STEPS}."
+                    f"\n[Memory Guard] CUDA OOM or limit exceeded at step {step} with batch_size={BATCH_SIZE}, grad_accum_steps={GRAD_ACCUM_STEPS}."
                 )
                 self.optimizer.zero_grad(set_to_none=True)
                 torch.cuda.empty_cache()
@@ -348,8 +528,7 @@ class SFTTrainer(Trainer):
             else:
                 raise e
     
-    def get_batch(self, streaming=True):
-        DATASET = self.test_data
+    def get_batch(self, DATASET, streaming=True):
         """
            Creates a DataLoader for SFT training.
        
@@ -503,7 +682,8 @@ class SFTTrainer(Trainer):
                     "Dataset example must contain either "
                     "'messages' or 'text'."
                 )
-    
+            
+            self.config.current_example += 1
             return tokens, assistant_mask
         # ---------------------------------------------------------
         # 2. Tight-packing iterator
@@ -601,11 +781,14 @@ class SFTTrainer(Trainer):
             )
     
         else:
-    
+            class PackedDataset_NonStreaming(TorchIterableDataset):
+                def __iter__(self):
+                    yield from packed_examples()
+                    
             loader = DataLoader(
-                packed_examples(),
+                PackedDataset_NonStreaming(),
                 batch_size=batch_size,
-                shuffle=True,
+                shuffle=False,
                 collate_fn=collate_fn,
                 pin_memory=(self.device.type == "cuda"),
                 num_workers=0,

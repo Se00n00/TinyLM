@@ -7,6 +7,8 @@ from typing import Any, Dict
 
 import numpy as np
 import torch
+import torch.nn.functional as F
+
 from torch.amp import autocast
 from tqdm import tqdm
 
@@ -15,197 +17,26 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 
 
 class Trainer(ABC):
-    # def get_batch(
-    #     self,
-    #     step,
-    #     data,
-    #     data_len,
-    #     batch_size,
-    #     max_seq_len,
-    #     device,
-    #     pipeline,
-    #     rand=False,
-    # ):
-    #     """
-    #     Fetches a batch for Pretraining / IFT / PFT.
-    #     """
-    
-    #     batch = {}
-    
-    #     match pipeline:
-    
-    #         # -------------------------------------------------
-    #         # IFT
-    #         # -------------------------------------------------
-    #         case "IFT":
-    
-    #             start = (step * batch_size * max_seq_len) % (
-    #                 data_len - max_seq_len - 1
-    #             )
-    
-    #             if rand:
-    #                 ix = torch.randint(
-    #                     start,
-    #                     data_len - max_seq_len - 1,
-    #                     (batch_size,),
-    #                 )
-    #             else:
-    #                 ix = torch.arange(
-    #                     start,
-    #                     start + batch_size * max_seq_len,
-    #                     max_seq_len,
-    #                 )
-    
-    #             batch["inputs"] = torch.stack([
-    #                 torch.from_numpy(
-    #                     data["token_path"][i:i + max_seq_len].astype(np.int64)
-    #                 )
-    #                 for i in ix
-    #             ]).to(device)
-    
-    #             batch["labels"] = torch.stack([
-    #                 torch.from_numpy(
-    #                     data["label_path"][i:i + max_seq_len].astype(np.int64)
-    #                 )
-    #                 for i in ix
-    #             ]).to(device)
-    
-    #         # -------------------------------------------------
-    #         # PFT / DPO
-    #         # -------------------------------------------------
-    #         case "PFT":
-    #             chosen_offsets = data["chosen_offset_path"]
-    #             rejected_offsets = data["rejected_offset_path"]
-                
-    #             assert len(chosen_offsets) == len(rejected_offsets)
-                
-    #             num_examples = len(chosen_offsets) - 1
-    
-    #             if rand:
-    #                 ix = torch.randint(
-    #                     0,
-    #                     num_examples,
-    #                     (batch_size,),
-    #                 )
-    #             else:
-    #                 start = (step * batch_size) % num_examples
-    #                 end = min(start + batch_size, num_examples)
-    #                 ix = torch.arange(start, end)
-    
-    #             chosen_inputs = []
-    #             chosen_labels = []
-    
-    #             rejected_inputs = []
-    #             rejected_labels = []
-    
-    #             chosen_offsets = data["chosen_offset_path"]
-    #             rejected_offsets = data["rejected_offset_path"]
-    
-    #             for idx in ix.tolist():
-                
-    #                 # --------------------
-    #                 # chosen
-    #                 # --------------------
-    #                 s = chosen_offsets[idx]
-    #                 e = chosen_offsets[idx + 1]
-                
-    #                 chosen_ids = data["chosen_token_path"][s:e][:max_seq_len]
-    #                 chosen_lbl = data["chosen_label_path"][s:e][:max_seq_len]
-                
-    #                 chosen_inputs.append(
-    #                     torch.from_numpy(chosen_ids.astype(np.int64))
-    #                 )
-                
-    #                 chosen_labels.append(
-    #                     torch.from_numpy(chosen_lbl.astype(np.int64))
-    #                 )
-                
-    #                 # --------------------
-    #                 # rejected
-    #                 # --------------------
-    #                 s = rejected_offsets[idx]
-    #                 e = rejected_offsets[idx + 1]
-                
-    #                 rejected_ids = data["rejected_token_path"][s:e][:max_seq_len]
-    #                 rejected_lbl = data["rejected_label_path"][s:e][:max_seq_len]
-                
-    #                 rejected_inputs.append(
-    #                     torch.from_numpy(rejected_ids.astype(np.int64))
-    #                 )
-                
-    #                 rejected_labels.append(
-    #                     torch.from_numpy(rejected_lbl.astype(np.int64))
-    #                 )
-                    
-    #             batch["chosen_input_ids"] = torch.nn.utils.rnn.pad_sequence(
-    #                 chosen_inputs,
-    #                 batch_first=True,
-    #                 padding_value=0,
-    #             ).to(device)
-    
-    #             batch["chosen_labels"] = torch.nn.utils.rnn.pad_sequence(
-    #                 chosen_labels,
-    #                 batch_first=True,
-    #                 padding_value=0,
-    #             ).to(device)
-    
-    #             batch["rejected_input_ids"] = torch.nn.utils.rnn.pad_sequence(
-    #                 rejected_inputs,
-    #                 batch_first=True,
-    #                 padding_value=0,
-    #             ).to(device)
-    
-    #             batch["rejected_labels"] = torch.nn.utils.rnn.pad_sequence(
-    #                 rejected_labels,
-    #                 batch_first=True,
-    #                 padding_value=0,
-    #             ).to(device)
-    
-    #             batch["chosen_attention_mask"] = (
-    #                 batch["chosen_input_ids"] != 0
-    #             ).long().to(device)
-    
-    #             batch["rejected_attention_mask"] = (
-    #                 batch["rejected_input_ids"] != 0
-    #             ).long().to(device)
-    
-    #         # -------------------------------------------------
-    #         # Pretraining
-    #         # -------------------------------------------------
-    #         case _:
-    
-    #             start = (step * batch_size * max_seq_len) % (
-    #                 data_len - max_seq_len - 1
-    #             )
-    
-    #             if rand:
-    #                 ix = torch.randint(
-    #                     start,
-    #                     data_len - max_seq_len - 1,
-    #                     (batch_size,),
-    #                 )
-    #             else:
-    #                 ix = torch.arange(
-    #                     start,
-    #                     start + batch_size * max_seq_len,
-    #                     max_seq_len,
-    #                 )
-    
-    #             batch["inputs"] = torch.stack([
-    #                 torch.from_numpy(
-    #                     data["token_path"][i:i + max_seq_len].astype(np.int64)
-    #                 )
-    #                 for i in ix
-    #             ]).to(device)
-    
-    #             batch["labels"] = torch.stack([
-    #                 torch.from_numpy(
-    #                     data["token_path"][i + 1:i + 1 + max_seq_len].astype(np.int64)
-    #                 )
-    #                 for i in ix
-    #             ]).to(device)
-    
-    #     return batch
+    def get_entropy_and_mean_token_accuracy(self, logits, labels, label_idx):
+        flat_logits = logits.view(-1, logits.size(-1))
+        flat_labels = labels.view(-1)
+        mask = flat_labels != label_idx
+        
+        valid_logits = flat_logits[mask]
+        valid_labels = flat_labels[mask]
+        
+        log_probs = F.log_softmax(valid_logits, dim=-1)
+        probs = log_probs.exp()
+        
+        entropy = -(probs * log_probs).sum(dim=-1).mean()
+        
+        predictions = valid_logits.argmax(dim=-1)
+        
+        mean_token_accuracy = (
+            predictions == valid_labels
+        ).float().mean()
+        
+        return entropy.item(), mean_token_accuracy.item()
 
     
     @abstractmethod

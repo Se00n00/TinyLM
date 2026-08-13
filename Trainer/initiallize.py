@@ -33,21 +33,12 @@ def initialize(args):
     os.makedirs(f"{args.checkpoint_dir}/{args.training_name}/{args.model}_{args.pipeline}", exist_ok=True)
 
     init_csv(
-        f"{args.checkpoint_dir}/{args.training_name}/{args.model}_{args.pipeline}/logs_train.csv",
-        ["step", "loss", "perplexity", "learning_rate", "GNorm"],
+        f"{args.checkpoint_dir}/{args.training_name}/logs_train.csv",
+        ["step", "num_examples", "loss", "perplexity", "entropy", "mean_token_accuracy", "learning_rate", "GNorm"],
     )
     init_csv(
-        f"{args.checkpoint_dir}/{args.training_name}/{args.model}_{args.pipeline}/logs_validation.csv",
-        ["step", "loss", "perplexity", "learning_rate", "GNorm"],
-    )
- 
-    init_csv(
-        f"{args.checkpoint_dir}/{args.training_name}/{args.model}_{args.pipeline}/monitor_train.csv",
-        ["step", "loss", "AttentionEntropy"],
-    )
-    init_csv(
-        f"{args.checkpoint_dir}/{args.training_name}/{args.model}_{args.pipeline}/monitor_validation.csv",
-        ["step", "loss", "AttentionEntropy"],
+        f"{args.checkpoint_dir}/{args.training_name}/logs_validation.csv",
+        ["step", "num_examples", "loss", "perplexity", "entropy", "mean_token_accuracy"],
     )
 
     tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
@@ -62,7 +53,7 @@ def initialize(args):
             )
 
     checkpoint_path = Path(
-        os.path.join(args.checkpoint_dir, f"{args.training_name}/{args.model}_{args.pipeline}.pt")
+        os.path.join(args.checkpoint_dir, f"{args.training_name}/model.pt")
     )
     if checkpoint_path.is_file():
         print("The file exists.")

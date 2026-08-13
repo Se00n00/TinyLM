@@ -4,6 +4,7 @@ def get_lr(step, max_steps, learning_rate, warmup_steps=100, min_lr_ratio=0.1):
     """
     Cosine learning rate decay with linear warmup.
     """
+    print(step, max_steps, learning_rate, warmup_steps, min_lr_ratio)
     min_lr = learning_rate * min_lr_ratio
     if step < warmup_steps:
         return learning_rate * step / warmup_steps
