@@ -1,5 +1,8 @@
 import argparse
+
 from Trainer.initiallize import initialize
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description="TinyLLM Trainer")
 
@@ -29,12 +32,17 @@ def parse_arguments():
     parser.add_argument(
         "--complete_data", type=bool, default=False, help="Train on Complete Dataset ?"
     )
-    parser.add_argument("--warmup_steps", type=int, default=2000, help="LR warmup steps")
+    parser.add_argument(
+        "--warmup_steps", type=int, default=2000, help="LR warmup steps"
+    )
     parser.add_argument(
         "--eval_interval", type=int, default=200, help="Steps between evaluations"
     )
     parser.add_argument(
-        "--monitor_interval", type=int, default=20, help="Steps between monitor model internals"
+        "--monitor_interval",
+        type=int,
+        default=20,
+        help="Steps between monitor model internals",
     )
     parser.add_argument(
         "--checkpoint_dir",
@@ -100,8 +108,7 @@ def parse_arguments():
     return args
 
 
-# Wikitext-103 for pre-training Experimentations
-DATAPATH = {
+LOCAL_DATAPATH = {
     "train": {
         "token_path": "Datasets/Pre_Training/dataset_train.bin",
     },
@@ -110,24 +117,215 @@ DATAPATH = {
     },
     "test": {
         "token_path": "Datasets/Pre_Training/dataset_test.bin",
-    }
+    },
 }
 
-from Trainer.pretrainer import PreTrainer
+PRETRAINING_HUGGINGFACE_DATASET = [
+    {
+        "base": "HuggingFaceFW/fineweb",
+        "subset": "sample-10BT",
+        "split": "train",
+    },
+    {
+        "base": "HuggingFaceFW/fineweb-edu",
+        "subset": "sample-10BT",
+        "split": "train",
+    },
+    {
+        "base": "bigcode/the-stack-v2",
+        "subset": "JSON",
+        "split": "train",
+    },
+    {
+        "base": "bigcode/the-stack-v2",
+        "subset": "Shell",
+        "split": "train",
+    },
+    {
+        "base": "HuggingFaceTB/smollm-corpus",
+        "subset": "cosmopedia-v2",
+        "split": "train",
+    },
+    {
+        "base": "bigcode/the-stack-v2",
+        "subset": "API_Blueprint",
+        "split": "train",
+    },
+    {
+        "base": "bigcode/the-stack-v2",
+        "subset": "Python",
+        "split": "train",
+    },
+    {
+        "base": "emozilla/pg19",
+        "subset": None,
+        "split": "train",
+    },
+]
+
+from datasets import load_dataset
+
+# from Trainer.pretrainer import PreTrainer
+from transformers import AutoTokenizer
+
+from trainer import SFTConfig, SFTTrainer
+from Model.layers import Config
+from Model.models import Model
+from datasets import load_dataset_builder
+
 if __name__ == "__main__":
     args = parse_arguments()
     initialize(args)
-    
+
     match args.pipeline:
-        case 'PT':
+        case "PT":
             print(f"\nStarted Training With {args.pipeline}")
-            trainer = PreTrainer(args)
-            total_time, best_val_loss = trainer.train(dataset= DATAPATH)
-            
+            builder = load_dataset_builder("Se00n00/FineWeb-1B")
+            total_samples = builder.info.splits["train"].num_examples
+
+
+            tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
+            match args.model:
+                case "Alibi":
+                    model = Model(Config(vocab_size=len(tokenizer)))
+    
+                case _:
+                    model = Model(Config(vocab_size=len(tokenizer)))
+                    
+            trainer = SFTTrainer(
+                training_name="Train",
+                model=model,
+                tokenizer= tokenizer,
+                ds=load_dataset("Se00n00/FineWeb-1B", split="train", streaming=True),
+                config = SFTConfig(total_samples=total_samples)
+            )
+
+            # trainer = PreTrainer(
+            #     args, type="huggingface", data=PRETRAINING_HUGGINGFACE_DATASET
+            # )
+            # total_time, best_val_loss =
+            trainer.train()
+
         case _:
-            trainer = PreTrainer(args)
-            print(f"\nStarted Training With Default pre-training Pipeline")
-            total_time, best_val_loss = trainer.train(dataset= DATAPATH)
+            trainer = PreTrainer(args, type="local", data=LOCAL_DATAPATH)
+            print("\nStarted Training With Default pre-training Pipeline")
+            total_time, best_val_loss = trainer.train()
 
     print(f"\nTraining finished in {total_time:.2f} minutes.")
     print(f"Best Validation Loss achieved: {best_val_loss:.4f}")
+
+
+# CHAT TEMPLATE 
+# -------------------------
+# For Text Genration
+# -------------------------
+# "text": ...
+# -------------------------
+# Instruction Fine Tunning
+# -------------------------
+# "messages":[
+#     {
+#         "role":"system",
+#         "content":"..."
+#     },
+#     {
+#         "role":"user",
+#         "content":"..."
+#     },
+#     {
+#         "role":"assistant",
+#         "content": "..."
+#     }
+# ]
+# -------------------------
+# Reasoning Fine Tunning
+# -------------------------
+# "messages":[
+#     {
+#         "role":"system",
+#         "content":"..."
+#     },
+#     {
+#         "role":"user",
+#         "content":"..."
+#     },
+#     {
+#         "role":"assistant",
+#         "content": "<|THINK|> ... <|THINK|> ..."
+#     }
+# ]
+# -------------------------
+# Tool Calling
+# -------------------------
+# "messages":[{
+#     "available_tools": [
+#         {
+#             "name": "get_weather",
+#             "description": "Get the current weather for a city.",
+#             "parameters": {
+#                 "type": "object",
+#                 "properties": {
+#                     "city": {
+#                         "type": "string",
+#                         "description": "Name of the city."
+#                     }
+#                 },
+#                 "required": ["city"]
+#             }
+#         }
+#     ],
+#     "system": "...",
+#     "user":"...",
+#     "assisstant": """... <|TOOL_CALLS|>[
+#         {
+#             "name": "...",
+#             "arguments":{
+#                 "expression":"..."
+#             }
+#         }
+#     ]<|/TOOL_CALLS|> ..."""
+# }]
+# 
+# ---------------------------
+# Tool Calling + Reasoning
+# ---------------------------
+# "messages":[
+#     {
+#         "role":"available_tools",
+#         "content":[
+#             {
+#                 "name": "get_weather",
+#                 "description": "Get the current weather for a city.",
+#                 "parameters": {
+#                     "type": "object",
+#                     "properties": {
+#                         "city": {
+#                             "type": "string",
+#                             "description": "Name of the city."
+#                         }
+#                     },
+#                     "required": ["city"]
+#                 }
+#             }
+#         ]
+#     },
+#     {
+#         "role": "system",
+#         "content":"...",
+#     },
+#     {
+#         "role": "user",
+#         "content": "..."
+#     },
+#     {
+#         "role":"assistant",
+#         "content": """<|THINK|> ... <|/THINK|> ... <|TOOL_CALLS|>[
+#             {
+#                 "name": "...",
+#                 "arguments":{
+#                     "expression":"..."
+#                 }
+#             }
+#         ]<|/TOOL_CALLS|> ..."""
+#     }
+# ]

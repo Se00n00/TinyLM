@@ -1,0 +1,68 @@
+{
+  "pre_training":{
+    "0":{
+      "base": "HuggingFaceFW/fineweb",
+      "subset": "sample-10BT",
+      "split": "train",
+      "example_idx": 0,
+      "tokens_consumed": 0,
+      "trained":false
+    },
+    "1":{
+      "base": "HuggingFaceFW/fineweb-edu",
+      "subset": "sample-10BT",
+      "split": "train",
+      "example_idx": 0,
+      "tokens_consumed": 0,
+      "trained":false
+    },
+   "2":{
+      "base": "bigcode/the-stack-v2",
+      "subset": "JSON",
+      "split": "train",
+      "example_idx": 0,
+      "tokens_consumed": 0,
+      "trained":false
+    },
+    "3":{
+      "base": "bigcode/the-stack-v2",
+      "subset": "Shell",
+      "split": "train",
+      "example_idx": 0,
+      "tokens_consumed": 0,
+      "trained":false
+    },
+    "4":{
+      "base": "HuggingFaceTB/smollm-corpus",
+      "subset": "cosmopedia-v2",
+      "split": "train",
+      "example_idx": 0,
+      "tokens_consumed": 0,
+      "trained":false
+    },
+    "5":{
+      "base": "bigcode/the-stack-v2",
+      "subset": "API_Blueprint",
+      "split": "train",
+      "example_idx": 0,
+      "tokens_consumed": 0,
+      "trained":false
+    },
+    "6":{
+      "base": "bigcode/the-stack-v2",
+      "subset": "Python",
+      "split": "train",
+      "example_idx": 0,
+      "tokens_consumed": 0,
+      "trained":false
+    },
+    "7":{
+      "base": "emozilla/pg19",
+      "subset": null,
+      "split": "train",
+      "example_idx": 0,
+      "tokens_consumed": 0,
+      "trained":false
+    }
+  }
+}
