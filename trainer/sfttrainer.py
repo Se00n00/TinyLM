@@ -147,7 +147,7 @@ class SFTConfig:
 
     # LEARNING PARAMETERS 
     batch_size: int = 2
-    grad_accum_steps: int = 4
+    grad_accum_steps: int = 16
     warmup_steps_ratio:float = 0.10 # 10 % of total steps
     checkpoint_dir:str = "checkpoints"
     resume:str | None = None
@@ -234,6 +234,7 @@ class SFTTrainer(Trainer):
                 
     def train(self):
         super().train()
+        self.best_val_loss = float("inf")
         self.model.to(self.device)
         BATCH_SIZE = self.config.batch_size
         GRAD_ACCUM_STEPS = self.config.grad_accum_steps
@@ -281,7 +282,9 @@ class SFTTrainer(Trainer):
                 
         consumed = 0
         t_initial = time.time()
-
+        
+        train_bar = tqdm(desc="Training", dynamic_ncols=True)
+            
         try:
             total_iterations = self.config.total_samples
             
@@ -304,8 +307,6 @@ class SFTTrainer(Trainer):
             print(
                 "----------------------------------------------------------------------------\n"
             )
-            train_bar = tqdm(desc="Training", dynamic_ncols=True)
-            
             # ---------------------------------------------
             # TRAIN LOOP
             # ---------------------------------------------
@@ -404,7 +405,7 @@ class SFTTrainer(Trainer):
                     )
             
                 # -------------------------------------------------------
-                # EVAL STEP
+                # EVAL STEP/
                 # -------------------------------------------------------
                 if step % self.config.eval_steps == 0 or (EPOCH_COMPLETED == True):
                     self.model.eval()
@@ -492,7 +493,9 @@ class SFTTrainer(Trainer):
                     )
                     
                 step += 1
+            print("\nTRAINING COMPLETE !")
         except RuntimeError as e:
+            tqdm.write(str(e))
             err_msg = str(e).lower()
             if (
                 "out of memory" in err_msg
@@ -524,9 +527,13 @@ class SFTTrainer(Trainer):
                     print(
                         "  [Memory Guard] Out of memory even with micro-batch size 1 and gradient checkpointing active."
                     )
+                    
+                    train_bar.close()
                     raise e
             else:
+                train_bar.close()
                 raise e
+        
     
     def get_batch(self, DATASET, streaming=True):
         """

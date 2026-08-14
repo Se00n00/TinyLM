@@ -27,7 +27,7 @@ class RMSNorm(nn.Module):
 
 
 class Attention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, max_len: int, dropout_prob: float):
+    def __init__(self, d_model: int, num_heads: int, dropout_prob: float):
         super().__init__()
         
         assert d_model % num_heads == 0, (
@@ -197,7 +197,6 @@ class MoE(nn.Module):
 @dataclass
 class Config:
     num_layer: int = 8
-    max_len: int = 512
     vocab_size: int = 30000
 
     d_model: int = 768
@@ -219,7 +218,7 @@ class Block(nn.Module):
         self.norm1 = RMSNorm(config.d_model, config.norm_epsilon)
         self.norm2 = RMSNorm(config.d_model, config.norm_epsilon)
         self.attention = Attention(
-            config.d_model, config.num_heads, config.max_len, config.dropout_prob
+            config.d_model, config.num_heads, config.dropout_prob
         )
         self.feedforward = FeedForward(
             config.d_model, config.ff_hidden_d, config.ff_gated, config.dropout_prob
