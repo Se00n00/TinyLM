@@ -39,7 +39,7 @@ def parse_arguments():
         help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
     )
     parser.add_argument(
-        "--learning_rate", type=float, default=0.0, help="Max learning rate"
+        "--learning_rate", type=float, default=3e-4, help="Max learning rate"
     )
 
     # LOGGING & EVALUATION
