@@ -1,14 +1,37 @@
-# TinyLM-1-70M: Deep-Dive Custom Transformer Framework
+# TinyLM
 
 [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-TinyLM--1--70M-FFD21E.svg?logo=huggingface&logoColor=black)](https://huggingface.co/Se00n00/TinyLM-1-70M)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg?logo=python&logoColor=white)](#)
 [![PyTorch 2.0+](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg?logo=pytorch&logoColor=white)](#)
-[![GPU Accelerated](https://img.shields.io/badge/CUDA-Accelerated-green.svg?logo=nvidia&logoColor=white)](#)
-[![Pipeline: PT | IFT | PFT](https://img.shields.io/badge/Pipeline-PT%20%7C%20IFT%20%7C%20PFT-orange.svg)](#)
 
 
-TinyLM-1-70M is a compact decoder-only Transformer language model designed for efficient instruction following and conversational AI. The model has approximately 72M parameters and has been fine-tuned using Supervised Fine-Tuning (SFT) on an instruction-response dataset to improve chat capabilities while maintaining a lightweight footprint suitable for local inference and resource-constrained environments.
+**TinyLM-1-70M** is a compact decoder-only Transformer language model designed for efficient instruction following and conversational AI on edge devices, while also providing a lightweight platform for researching and understanding language-model behavior
 
+---
+
+## Model Architecture Overview [Architecture - Experimentations](experiments/EXPERIMENTS.md)
+
+TinyLM leverages a pre-normalization architecture with gated feedforward networks
+
+```
+-----------------------------------------------------------------------------------
+
+ [OUTPUT]                                 Architecture: Naive MHA
+    │                                      .
+    + ──────────┐                           \_ [72M Parmaereters]
+    |   ┌──────────────────────────┐       .
+    │   |        FEEDFORWARD       │        \_ [528 D_model]
+    │   └──────────────────────────┘       .
+    |──[RMS-NORM]───┘                       \_ [528 Context Length]
+    + ──────────┐
+    │   ┌──────────────────────────┐   
+    │   |   MULTI-HEAD ATTENTION   │
+    │   └──────────────────────────┘
+    └──[RMS-NORM]───┘
+    │
+ [INPUT] + ──[LEARNED ENCODING]
+
+-----------------------------------------------------------------------------------
+```
 ---
 
 ## Navigation Menu
@@ -19,31 +42,6 @@ TinyLM-1-70M is a compact decoder-only Transformer language model designed for e
 - [Installation & Data Preparation](#installation--data-preparation)
 - [3-Stage Pipeline](#the-3-stage-llm-pipeline)
 - [Streaming Inference](#asynchronous-streaming-inference)
-
----
-
-## Model Architecture Overview
-
-TinyLM-1-70M leverages a pre-normalization architecture with gated feedforward networks and optional Mixture of Experts.
-
-The schematic sequence mapping input text processing through the networks is illustrated below:
-
-```
- [OUTPUT]
-    │
-    + ──────────┐
-    |   ┌──────────────────────────┐  
-    │   |        FEEDFORWARD       │
-    │   └──────────────────────────┘
-    |──[RMS-NORM]───┘
-    + ──────────┐
-    │   ┌──────────────────────────┐   
-    │   |   MULTI-HEAD ATTENTION   │
-    │   └──────────────────────────┘
-    └──[RMS-NORM]───┘
-    │
- [INPUT] + ──[LEARNED ENCODING]
-```
 
 ---
 

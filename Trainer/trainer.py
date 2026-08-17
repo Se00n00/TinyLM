@@ -103,6 +103,25 @@ def parse_arguments():
         default="PT",
         help="Pipeline process: pt, it,..",
     )
+    parser.add_argument(
+        "--distributed",
+        type=str,
+        choices=["none", "ddp"],
+        default="none",
+        help="Distributed training strategy (none or ddp)",
+    )
+    parser.add_argument(
+        "--world_size",
+        type=int,
+        default=1,
+        help="Number of processes for distributed training",
+    )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default=None,
+        help="Distributed communication backend (nccl or gloo)",
+    )
 
     args = parser.parse_args()
 
@@ -191,22 +210,42 @@ if __name__ == "__main__":
     config = SFTConfig(
         total_samples=1200,
         batch_size=args.batch_size,
+        grad_accum_steps=args.grad_accum_steps,
         resume=args.resume,
         learning_rate=args.learning_rate,
-        logging_steps=args.eval_interval,
+        logging_steps=args.log_interval,
         eval_steps=args.eval_interval,
-        max_length=args.max_seq_len
+        max_length=args.max_seq_len,
+        distributed=args.distributed,
+        backend=args.backend,
+        vram_limit_mb=args.vram_limit_mb,
+        max_temp=args.max_temp,
+        cooldown_temp=args.cooldown_temp,
+        weight_decay=args.weight_decay,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
     os.makedirs(f"{args.checkpoint_dir}/{args.training_name}_{args.pipeline}", exist_ok=True)
 
-    trainer = SFTTrainer(
-        training_name=f"{args.training_name}_{args.pipeline}",
-        model=model,
-        tokenizer=tokenizer,
-        ds=load_dataset(
-            EXAMPLE_DATASET["base"], split=EXAMPLE_DATASET["split"], streaming=True
-        ).take(1200),
-        config=config,
-    )
-
-    trainer.train()
+    # If launched with multiple processes via mp.spawn without torchrun
+    if args.distributed == "ddp" and args.world_size > 1 and "RANK" not in os.environ:
+        SFTTrainer.launch(
+            args.world_size,
+            training_name=f"{args.training_name}_{args.pipeline}",
+            model=model,
+            tokenizer=tokenizer,
+            ds=load_dataset(
+                EXAMPLE_DATASET["base"], split=EXAMPLE_DATASET["split"], streaming=True
+            ).take(1200),
+            config=config,
+        )
+    else:
+        trainer = SFTTrainer(
+            training_name=f"{args.training_name}_{args.pipeline}",
+            model=model,
+            tokenizer=tokenizer,
+            ds=load_dataset(
+                EXAMPLE_DATASET["base"], split=EXAMPLE_DATASET["split"], streaming=True
+            ).take(1200),
+            config=config,
+        )
+        trainer.train()

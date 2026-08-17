@@ -41,5 +41,4 @@ class Model(nn.Module):
     
         
 # TO-DO
-# [2] Padding Handling
-# [3] Add Option for KV Cache for faster inference
+# [] Add Option for KV Cache for faster inference
