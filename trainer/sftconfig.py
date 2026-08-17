@@ -8,9 +8,9 @@ class SFTConfig:
     # MISC
     total_samples:int
     test_train_ratio: float = 0.01
-    min_lr_ratio = 0.8
-    max_test_rows = 10000
-    label_idx = -100
+    min_lr_ratio:float = 0.8
+    max_test_rows:int = 10000
+    label_idx:int = -100
     
     # LEARNING PARAMETERS 
     batch_size: int = 2
@@ -37,3 +37,25 @@ class SFTConfig:
     # TRAINING
     gradient_checkpointing: bool = True
     weight_decay:float = 0.1
+    
+    
+    # DISTRIBUTED
+    distributed: str = "none"
+    ddp_backend: str = "nccl"
+    
+    # Passed straight through to DistributedDataParallel. Only set this
+    # to True if some parameters genuinely don't receive gradients on
+    # every forward pass (e.g. certain MoE / routing architectures) -
+    # it disables an optimization and slows every step down otherwise.
+    ddp_find_unused_parameters: bool = False
+    
+    # Timeout (seconds) for collective NCCL/Gloo ops. The default
+    # torch.distributed timeout (30 min) is usually fine, but slow
+    # checkpoint saves or big eval sets on rank 0 can occasionally
+    # trip the watchdog on other ranks, so it's exposed here.
+    ddp_timeout_seconds: int = 1800
+    
+    # Whether the "GPU too hot" cooldown/backoff logic (check_and_cooldown_gpu)
+    # should be enforced per-rank (default) or only decided by rank 0 and
+    # then broadcast, to keep all ranks in lockstep. See note in trainer.
+    ddp_sync_cooldown: bool = True
