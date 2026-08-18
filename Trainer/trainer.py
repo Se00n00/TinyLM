@@ -212,7 +212,7 @@ from Model.layers import Config
 from Model.models import Model
 from trainer import SFTConfig, SFTTrainer
 
-EXAMPLE_DATASET = {"base": "HuggingFaceFW/fineweb", "subset": "sample-10BT", "split": "train"}
+EXAMPLE_DATASET = {"base": "HuggingFaceFW/fineweb-edu", "subset": "sample-10BT", "split": "train"}
 if __name__ == "__main__":
     args = parse_arguments()
     training_name = f"{args.training_name}_{args.pipeline}"
