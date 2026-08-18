@@ -39,6 +39,12 @@ def parse_arguments():
         help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
     )
     parser.add_argument(
+        "--resum_same_dataset",
+        type=bool,
+        default=False,
+        help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
+    )
+    parser.add_argument(
         "--learning_rate", type=float, default=3e-4, help="Max learning rate"
     )
 
@@ -194,7 +200,7 @@ from Model.layers import Config
 from Model.models import Model
 from trainer import SFTConfig, SFTTrainer
 
-EXAMPLE_DATASET = {"base": "Se00n00/FineWeb-1B", "subset": None, "split": "train"}
+EXAMPLE_DATASET = {"base": "HuggingFaceFW/fineweb", "subset": "sample-10BT", "split": "train"}
 if __name__ == "__main__":
     args = parse_arguments()
     training_name = f"{args.training_name}_{args.pipeline}"
@@ -211,7 +217,7 @@ if __name__ == "__main__":
             model = Model(Config(vocab_size=len(tokenizer)))
 
     config = SFTConfig(
-        total_samples=1200,
+        total_samples=total_samples,
         batch_size=args.batch_size,
         grad_accum_steps=args.grad_accum_steps,
         resume=args.resume,
@@ -253,7 +259,6 @@ if __name__ == "__main__":
     )
     if args.resum_same_dataset and row_offset > 0:
         ds = ds.skip(row_offset)
-    ds = ds.take(1200)
     
     trainer_kwargs = dict(
         training_name=training_name,

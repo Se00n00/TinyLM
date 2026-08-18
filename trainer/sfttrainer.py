@@ -305,6 +305,19 @@ class SFTTrainer(Trainer):
         dist.all_reduce(t, op=dist.ReduceOp.SUM)
         return (t / self.world_size).item()
     
+    def _reduce_sum(self, value) -> float:
+        """
+        Sums a python number across all ranks. Used for turning each
+        rank's local "how many rows have I consumed from my shard"
+        counter into a single global row count, e.g. for checkpointing.
+        """
+        if not self.is_ddp:
+            return float(value)
+    
+        t = torch.tensor(float(value), dtype=torch.float64, device=self.device)
+        dist.all_reduce(t, op=dist.ReduceOp.SUM)
+        return t.item()
+        
     def _barrier(self):
         if self.is_ddp:
             dist.barrier()
@@ -885,277 +898,277 @@ class SFTTrainer(Trainer):
                     train_bar.close()
                     raise e
     
-        def get_batch(self, DATASET, streaming=True):
-            """
-            Creates a DataLoader for SFT training.
-    
-            Expected dataset examples can be either:
-    
+    def get_batch(self, DATASET, streaming=True):
+        """
+        Creates a DataLoader for SFT training.
+
+        Expected dataset examples can be either:
+
+            {
+                "messages": [
+                    {"role": "user", "content": "..."},
+                    {"role": "assistant", "content": "..."}
+                ]
+            }
+
+        or, if chat_template is not being used:
+
+            {
+                "text": "..."
+            }
+
+        Returns:
+            DataLoader yielding:
                 {
-                    "messages": [
-                        {"role": "user", "content": "..."},
-                        {"role": "assistant", "content": "..."}
+                    "data":   Tensor[B, max_length],
+                    "labels": Tensor[B, max_length]
+                }
+
+        SFT behavior:
+            - tight packing
+            - causal LM shifted labels
+            - non-assistant tokens -> -100
+            - padding -> -100
+
+        NOTE (DDP): `DATASET` passed in here is already the per-rank
+        shard produced in __init__ (self.train_data / self.test_data),
+        so no further sharding happens in this method - each rank simply
+        iterates its own slice independently.
+        """
+        max_length = self.config.max_length
+        batch_size = self.config.batch_size
+
+        tokenizer = self.tokenizer
+
+        def encode_example(example):
+            messages = example.get("messages", None)
+
+            # -----------------------------------------------------
+            # Chat dataset
+            # -----------------------------------------------------
+            if messages is not None:
+                if hasattr(tokenizer, "apply_chat_template"):
+                    # We need the assistant boundaries.
+                    #
+                    # The cleanest way is to tokenize the complete
+                    # conversation and separately tokenize the prefix
+                    # before the assistant response.
+                    #
+                    # This assumes normal SFT data:
+                    # user -> assistant
+
+                    tools = next(
+                        (
+                            msg.get("content")
+                            for msg in messages
+                            if msg.get("role") == "available_tools"
+                        ),
+                        None,
+                    )
+
+                    chat_messages = [
+                        msg for msg in messages if msg.get("role") != "available_tools"
                     ]
-                }
-    
-            or, if chat_template is not being used:
-    
-                {
-                    "text": "..."
-                }
-    
-            Returns:
-                DataLoader yielding:
-                    {
-                        "data":   Tensor[B, max_length],
-                        "labels": Tensor[B, max_length]
-                    }
-    
-            SFT behavior:
-                - tight packing
-                - causal LM shifted labels
-                - non-assistant tokens -> -100
-                - padding -> -100
-    
-            NOTE (DDP): `DATASET` passed in here is already the per-rank
-            shard produced in __init__ (self.train_data / self.test_data),
-            so no further sharding happens in this method - each rank simply
-            iterates its own slice independently.
-            """
-            max_length = self.config.max_length
-            batch_size = self.config.batch_size
-    
-            tokenizer = self.tokenizer
-    
-            def encode_example(example):
-                messages = example.get("messages", None)
-    
-                # -----------------------------------------------------
-                # Chat dataset
-                # -----------------------------------------------------
-                if messages is not None:
-                    if hasattr(tokenizer, "apply_chat_template"):
-                        # We need the assistant boundaries.
-                        #
-                        # The cleanest way is to tokenize the complete
-                        # conversation and separately tokenize the prefix
-                        # before the assistant response.
-                        #
-                        # This assumes normal SFT data:
-                        # user -> assistant
-    
-                        tools = next(
-                            (
-                                msg.get("content")
-                                for msg in messages
-                                if msg.get("role") == "available_tools"
-                            ),
-                            None,
-                        )
-    
-                        chat_messages = [
-                            msg for msg in messages if msg.get("role") != "available_tools"
-                        ]
-                        tokens = tokenizer.apply_chat_template(
-                            chat_messages,
+                    tokens = tokenizer.apply_chat_template(
+                        chat_messages,
+                        tokenize=True,
+                        tools=tools,
+                        add_generation_prompt=False,
+                    )["input_ids"]
+
+                    assistant_mask = [0] * len(tokens)
+
+                    # Find assistant messages and mark their content.
+                    #
+                    # We construct prefixes so we know exactly which
+                    # tokens belong to each assistant response.
+                    for i, msg in enumerate(chat_messages):
+                        if msg.get("role") != "assistant":
+                            continue
+
+                        # Conversation before this assistant message
+
+                        prefix_messages = chat_messages[:i]
+                        prefix_tokens = tokenizer.apply_chat_template(
+                            prefix_messages,
                             tokenize=True,
                             tools=tools,
-                            add_generation_prompt=False,
-                        )["input_ids"]
-    
-                        assistant_mask = [0] * len(tokens)
-    
-                        # Find assistant messages and mark their content.
-                        #
-                        # We construct prefixes so we know exactly which
-                        # tokens belong to each assistant response.
-                        for i, msg in enumerate(chat_messages):
-                            if msg.get("role") != "assistant":
-                                continue
-    
-                            # Conversation before this assistant message
-    
-                            prefix_messages = chat_messages[:i]
-                            prefix_tokens = tokenizer.apply_chat_template(
-                                prefix_messages,
-                                tokenize=True,
-                                tools=tools,
-                                add_generation_prompt=True,
-                            )
-    
-                            # Tokenize the assistant content itself.
-                            content_tokens = tokenizer(
-                                msg.get("content", ""),
-                                add_special_tokens=False,
-                            )["input_ids"]
-    
-                            start = len(prefix_tokens["input_ids"])
-    
-                            # Depending on the tokenizer's chat template,
-                            # there may be assistant header/special tokens
-                            # before the actual content.
-                            #
-                            # Mark the content tokens only.
-                            end = min(
-                                start + len(content_tokens),
-                                len(assistant_mask),
-                            )
-    
-                            assistant_mask[start:end] = [1] * (end - start)
-    
-                    else:
-                        # Fallback if tokenizer doesn't have a chat template.
-                        text = ""
-    
-                        for msg in messages:
-                            text += f"{msg['role']}: {msg['content']}\n"
-    
-                        encoded = tokenizer(
-                            text,
-                            add_special_tokens=True,
+                            add_generation_prompt=True,
                         )
-    
-                        tokens = encoded["input_ids"]
-    
-                        # No reliable assistant boundaries here.
-                        # Therefore don't train on this path as SFT unless
-                        # you provide your own masking logic.
-                        assistant_mask = [1] * len(tokens)
-    
-                # -----------------------------------------------------
-                # Plain text dataset
-                # -----------------------------------------------------
-                elif "text" in example:
+
+                        # Tokenize the assistant content itself.
+                        content_tokens = tokenizer(
+                            msg.get("content", ""),
+                            add_special_tokens=False,
+                        )["input_ids"]
+
+                        start = len(prefix_tokens["input_ids"])
+
+                        # Depending on the tokenizer's chat template,
+                        # there may be assistant header/special tokens
+                        # before the actual content.
+                        #
+                        # Mark the content tokens only.
+                        end = min(
+                            start + len(content_tokens),
+                            len(assistant_mask),
+                        )
+
+                        assistant_mask[start:end] = [1] * (end - start)
+
+                else:
+                    # Fallback if tokenizer doesn't have a chat template.
+                    text = ""
+
+                    for msg in messages:
+                        text += f"{msg['role']}: {msg['content']}\n"
+
                     encoded = tokenizer(
-                        example["text"],
+                        text,
                         add_special_tokens=True,
                     )
-    
+
                     tokens = encoded["input_ids"]
+
+                    # No reliable assistant boundaries here.
+                    # Therefore don't train on this path as SFT unless
+                    # you provide your own masking logic.
                     assistant_mask = [1] * len(tokens)
-    
-                else:
-                    raise ValueError(
-                        "Dataset example must contain either 'messages' or 'text'."
-                    )
-    
-                self.current_example += 1
-                return tokens, assistant_mask
-    
-            # ---------------------------------------------------------
-            # 2. Tight-packing iterator
-            # ---------------------------------------------------------
-            def packed_examples():
-    
-                token_buffer = []
-                mask_buffer = []
-    
-                for example in DATASET:
-                    tokens, assistant_mask = encode_example(example)
-    
-                    token_buffer.extend(tokens)
-                    mask_buffer.extend(assistant_mask)
-    
-                    # We need max_length + 1 because of causal shifting:
-                    #
-                    # tokens:
-                    #   [t0 t1 t2 ... tN]
-                    #
-                    # input:
-                    #   [t0 t1 t2 ... tN-1]
-                    #
-                    # label:
-                    #   [t1 t2 t3 ... tN]
-                    #
-                    while len(token_buffer) >= max_length + 1:
-                        chunk_tokens = token_buffer[: max_length + 1]
-                        chunk_mask = mask_buffer[: max_length + 1]
-    
-                        del token_buffer[: max_length + 1]
-                        del mask_buffer[: max_length + 1]
-    
-                        # Causal LM shift
-                        input_ids = chunk_tokens[:-1]
-                        target_ids = chunk_tokens[1:]
-    
-                        # Shift the assistant mask as well.
-                        #
-                        # mask[i] corresponds to token[i].
-                        # label[i] corresponds to token[i + 1].
-                        target_mask = chunk_mask[1:]
-    
-                        labels = [
-                            token if mask else self.config.label_idx
-                            for token, mask in zip(
-                                target_ids,
-                                target_mask,
-                            )
-                        ]
-    
-                        yield {
-                            "data": input_ids,
-                            "labels": labels,
-                        }
-    
-            # ---------------------------------------------------------
-            # 3. Collate fixed-length packed samples: Normal List --> torch tensor
-            # ---------------------------------------------------------
-            def collate_fn(batch):
-    
-                data = torch.tensor(
-                    [item["data"] for item in batch],
-                    dtype=torch.long,
+
+            # -----------------------------------------------------
+            # Plain text dataset
+            # -----------------------------------------------------
+            elif "text" in example:
+                encoded = tokenizer(
+                    example["text"],
+                    add_special_tokens=True,
                 )
-    
-                labels = torch.tensor(
-                    [item["labels"] for item in batch],
-                    dtype=torch.long,
-                )
-    
-                return {
-                    "data": data,
-                    "labels": labels,
-                }
-    
-            # ---------------------------------------------------------
-            # 4. DataLoader
-            # ---------------------------------------------------------
-            # Both branches below are functionally identical (as in the
-            # original code) - `DATASET` is already this rank's shard, so we
-            # just wrap it in a plain IterableDataset either way. No
-            # DistributedSampler is needed since sharding already happened at
-            # the `datasets.Dataset.shard(...)` level in __init__.
-            if streaming:
-    
-                class PackedDataset(TorchIterableDataset):
-                    def __iter__(self):
-                        yield from packed_examples()
-    
-                loader = DataLoader(
-                    PackedDataset(),
-                    batch_size=batch_size,
-                    shuffle=False,
-                    collate_fn=collate_fn,
-                    pin_memory=(self.device.type == "cuda"),
-                    num_workers=0,
-                )
-    
+
+                tokens = encoded["input_ids"]
+                assistant_mask = [1] * len(tokens)
+
             else:
-    
-                class PackedDataset_NonStreaming(TorchIterableDataset):
-                    def __iter__(self):
-                        yield from packed_examples()
-    
-                loader = DataLoader(
-                    PackedDataset_NonStreaming(),
-                    batch_size=batch_size,
-                    shuffle=False,
-                    collate_fn=collate_fn,
-                    pin_memory=(self.device.type == "cuda"),
-                    num_workers=0,
+                raise ValueError(
+                    "Dataset example must contain either 'messages' or 'text'."
                 )
-    
-            return loader
+
+            self.current_example += 1
+            return tokens, assistant_mask
+
+        # ---------------------------------------------------------
+        # 2. Tight-packing iterator
+        # ---------------------------------------------------------
+        def packed_examples():
+
+            token_buffer = []
+            mask_buffer = []
+
+            for example in DATASET:
+                tokens, assistant_mask = encode_example(example)
+
+                token_buffer.extend(tokens)
+                mask_buffer.extend(assistant_mask)
+
+                # We need max_length + 1 because of causal shifting:
+                #
+                # tokens:
+                #   [t0 t1 t2 ... tN]
+                #
+                # input:
+                #   [t0 t1 t2 ... tN-1]
+                #
+                # label:
+                #   [t1 t2 t3 ... tN]
+                #
+                while len(token_buffer) >= max_length + 1:
+                    chunk_tokens = token_buffer[: max_length + 1]
+                    chunk_mask = mask_buffer[: max_length + 1]
+
+                    del token_buffer[: max_length + 1]
+                    del mask_buffer[: max_length + 1]
+
+                    # Causal LM shift
+                    input_ids = chunk_tokens[:-1]
+                    target_ids = chunk_tokens[1:]
+
+                    # Shift the assistant mask as well.
+                    #
+                    # mask[i] corresponds to token[i].
+                    # label[i] corresponds to token[i + 1].
+                    target_mask = chunk_mask[1:]
+
+                    labels = [
+                        token if mask else self.config.label_idx
+                        for token, mask in zip(
+                            target_ids,
+                            target_mask,
+                        )
+                    ]
+
+                    yield {
+                        "data": input_ids,
+                        "labels": labels,
+                    }
+
+        # ---------------------------------------------------------
+        # 3. Collate fixed-length packed samples: Normal List --> torch tensor
+        # ---------------------------------------------------------
+        def collate_fn(batch):
+
+            data = torch.tensor(
+                [item["data"] for item in batch],
+                dtype=torch.long,
+            )
+
+            labels = torch.tensor(
+                [item["labels"] for item in batch],
+                dtype=torch.long,
+            )
+
+            return {
+                "data": data,
+                "labels": labels,
+            }
+
+        # ---------------------------------------------------------
+        # 4. DataLoader
+        # ---------------------------------------------------------
+        # Both branches below are functionally identical (as in the
+        # original code) - `DATASET` is already this rank's shard, so we
+        # just wrap it in a plain IterableDataset either way. No
+        # DistributedSampler is needed since sharding already happened at
+        # the `datasets.Dataset.shard(...)` level in __init__.
+        if streaming:
+
+            class PackedDataset(TorchIterableDataset):
+                def __iter__(self):
+                    yield from packed_examples()
+
+            loader = DataLoader(
+                PackedDataset(),
+                batch_size=batch_size,
+                shuffle=False,
+                collate_fn=collate_fn,
+                pin_memory=(self.device.type == "cuda"),
+                num_workers=0,
+            )
+
+        else:
+
+            class PackedDataset_NonStreaming(TorchIterableDataset):
+                def __iter__(self):
+                    yield from packed_examples()
+
+            loader = DataLoader(
+                PackedDataset_NonStreaming(),
+                batch_size=batch_size,
+                shuffle=False,
+                collate_fn=collate_fn,
+                pin_memory=(self.device.type == "cuda"),
+                num_workers=0,
+            )
+
+        return loader
     
     
 class _nullcontext:
