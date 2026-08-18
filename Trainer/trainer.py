@@ -45,6 +45,12 @@ def parse_arguments():
         help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
     )
     parser.add_argument(
+        "--dataset_limit",
+        type=int,
+        default=None,
+        help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
+    )
+    parser.add_argument(
         "--learning_rate", type=float, default=3e-4, help="Max learning rate"
     )
 
@@ -200,7 +206,7 @@ from Model.layers import Config
 from Model.models import Model
 from trainer import SFTConfig, SFTTrainer
 
-EXAMPLE_DATASET = {"base": "HuggingFaceFW/fineweb", "subset": "sample-10BT", "split": "train"}
+EXAMPLE_DATASET = {"base": "HuggingFaceFW/fineweb-edu", "subset": "sample-10BT", "split": "train"}
 if __name__ == "__main__":
     args = parse_arguments()
     training_name = f"{args.training_name}_{args.pipeline}"
@@ -209,6 +215,7 @@ if __name__ == "__main__":
     total_samples = builder.info.splits[EXAMPLE_DATASET["split"]].num_examples
     tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
 
+    print(total_samples, "\n\n")
     match args.model:
         case "Alibi":
             model = Model(Config(vocab_size=len(tokenizer)))
@@ -217,7 +224,7 @@ if __name__ == "__main__":
             model = Model(Config(vocab_size=len(tokenizer)))
 
     config = SFTConfig(
-        total_samples=total_samples,
+        total_samples=total_samples if args.dataset_limit is None else args.dataset_limit,
         batch_size=args.batch_size,
         grad_accum_steps=args.grad_accum_steps,
         resume=args.resume,
@@ -260,6 +267,8 @@ if __name__ == "__main__":
     if args.resum_same_dataset and row_offset > 0:
         ds = ds.skip(row_offset)
     
+    if args.dataset_limit:
+        ds.take(args.dataset_limit)
     trainer_kwargs = dict(
         training_name=training_name,
         model=model,
