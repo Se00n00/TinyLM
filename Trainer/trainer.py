@@ -217,7 +217,7 @@ if __name__ == "__main__":
     args = parse_arguments()
     training_name = f"{args.training_name}_{args.pipeline}"
 
-    builder = load_dataset_builder(EXAMPLE_DATASET["base"])
+    builder = load_dataset_builder(EXAMPLE_DATASET["base"], EXAMPLE_DATASET["subset"])
     total_samples = builder.info.splits[EXAMPLE_DATASET["split"]].num_examples
     tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
 
@@ -273,7 +273,7 @@ if __name__ == "__main__":
         )
     
     ds = load_dataset(
-        EXAMPLE_DATASET["base"], split=EXAMPLE_DATASET["split"], streaming=True
+        EXAMPLE_DATASET["base"], EXAMPLE_DATASET["subset"],  split=EXAMPLE_DATASET["split"], streaming=True
     )
     if args.resum_same_dataset and row_offset > 0:
         ds = ds.skip(row_offset)
