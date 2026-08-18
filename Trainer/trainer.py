@@ -246,6 +246,7 @@ if __name__ == "__main__":
         distributed=args.distributed,
         ddp_backend=args.backend,
         test_train_ratio = test_train_ratio,
+        warmup_steps_ratio=args.warmup_steps_ratio,
         vram_limit_mb=args.vram_limit_mb,
         max_temp=args.max_temp,
         cooldown_temp=args.cooldown_temp,

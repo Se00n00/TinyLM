@@ -556,10 +556,10 @@ class SFTTrainer(Trainer):
                         self._barrier()
     
                     lr = get_lr(
-                        self.current_example,
+                        step,
                         total_iterations,
                         self.config.learning_rate,
-                        int(total_iterations * self.config.warmup_steps_ratio),
+                        int(total_iterations * self.config.warmup_steps_ratio) if self.config.warmup_steps_ratio > 0 else 2000,
                         self.config.min_lr_ratio,
                     )
                     for param_group in self.optimizer.param_groups:
