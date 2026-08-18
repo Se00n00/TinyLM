@@ -680,72 +680,47 @@ class SFTTrainer(Trainer):
                     # -------------------------------------------------------
                     if step % self.config.eval_steps == 0 or (EPOCH_COMPLETED == True):
                         self.model.eval()
-                        total_eval_loss = 0.0
-                        val_entropy, val_mean_token_accuracy = 0, 0
-                        eval_steps = 0
-    
-                        # Every rank evaluates its own shard of the (already
-                        # sharded) test set in parallel; results are then
-                        # averaged across ranks below. Forward-only passes
-                        # like this don't trigger DDP's gradient all-reduce,
-                        # so it's safe for every rank to run this loop
-                        # independently without any explicit synchronization
-                        # until the reduction step.
-                        for batch in tqdm(
-                            self.get_batch(self.test_data, streaming=False),
-                            desc="Validation",
-                            disable=not self.is_main_process,
-                        ):
-                            batch_x = batch["data"].to(self.device, non_blocking=True)
-                            batch_y = batch["labels"].to(self.device, non_blocking=True)
-    
-                            with autocast(
-                                device_type=self.device.type, dtype=torch.float16
+                        val_loss = 0.0
+                        val_entropy, val_mean_token_accuracy = 0.0, 0.0
+                    
+                        if self.is_main_process:
+                            total_eval_loss = 0.0
+                            eval_steps = 0
+                    
+                            for batch in tqdm(
+                                self.get_batch(self.test_data, streaming=False),
+                                desc="Validation",
                             ):
-                                logits = self.model(batch_x)
-                                loss = F.cross_entropy(
-                                    logits.view(-1, logits.size(-1)),
-                                    batch_y.view(-1),
-                                    ignore_index=self.config.label_idx,
-                                )
-                                batch_entropy, batch_mean_token_accuracy = (
-                                    self.get_entropy_and_mean_token_accuracy(
-                                        logits, batch_y, self.config.label_idx
+                                batch_x = batch["data"].to(self.device, non_blocking=True)
+                                batch_y = batch["labels"].to(self.device, non_blocking=True)
+                    
+                                with autocast(device_type=self.device.type, dtype=torch.float16):
+                                    logits = self.raw_model(batch_x)
+                                    loss = F.cross_entropy(
+                                        logits.view(-1, logits.size(-1)),
+                                        batch_y.view(-1),
+                                        ignore_index=self.config.label_idx,
                                     )
-                                )
-    
-                                val_entropy += batch_entropy
-                                val_mean_token_accuracy += batch_mean_token_accuracy
-    
-                            total_eval_loss += loss.item()
-                            eval_steps += 1
-    
-                        # Guard against a rank ending up with an empty shard
-                        # (e.g. a tiny test set with more ranks than rows).
-                        eval_steps = max(eval_steps, 1)
-                        val_entropy = val_entropy / eval_steps
-                        val_mean_token_accuracy = val_mean_token_accuracy / eval_steps
-                        val_loss = total_eval_loss / eval_steps
-    
-                        # Average validation metrics across ranks so every
-                        # process (and the logs) agree on a single global
-                        # number, rather than each rank only reporting on its
-                        # own shard of the eval set.
-                        val_loss = self._reduce_mean(val_loss)
-                        val_entropy = self._reduce_mean(val_entropy)
-                        val_mean_token_accuracy = self._reduce_mean(val_mean_token_accuracy)
-    
-                        # Global count of rows consumed across ALL ranks so
-                        # far, i.e. the number your training script should
-                        # `.skip(...)` on the raw (unsharded) dataset if it
-                        # resumes from this checkpoint. This is a collective
-                        # call - every rank must reach it, not just rank 0.
+                                    batch_entropy, batch_mean_token_accuracy = (
+                                        self.get_entropy_and_mean_token_accuracy(
+                                            logits, batch_y, self.config.label_idx
+                                        )
+                                    )
+                                    val_entropy += batch_entropy
+                                    val_mean_token_accuracy += batch_mean_token_accuracy
+                    
+                                total_eval_loss += loss.item()
+                                eval_steps += 1
+                    
+                            eval_steps = max(eval_steps, 1)
+                            val_entropy = val_entropy / eval_steps
+                            val_mean_token_accuracy = val_mean_token_accuracy / eval_steps
+                            val_loss = total_eval_loss / eval_steps
+                    
                         global_current_example = self._reduce_sum(self.current_example)
-    
+                    
                         val_ppl = math.exp(val_loss) if val_loss < 1000 else float("inf")
-                        train_ppl = (
-                            math.exp(loss_accum) if loss_accum < 1000 else float("inf")
-                        )
+                        train_ppl = math.exp(loss_accum) if loss_accum < 1000 else float("inf")
                         self.model.train()
     
                         allocated_mb = (
