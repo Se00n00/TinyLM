@@ -51,12 +51,18 @@ def parse_arguments():
         help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
     )
     parser.add_argument(
+        "--validation_dataset_limit",
+        type=int,
+        default=None,
+        help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
+    )
+    parser.add_argument(
         "--learning_rate", type=float, default=3e-4, help="Max learning rate"
     )
 
     # LOGGING & EVALUATION
     parser.add_argument(
-        "--eval_interval", type=int, default=200, help="Steps between evaluations"
+        "--eval_interval", type=int, default=2000, help="Steps between evaluations"
     )
     parser.add_argument(
         "--log_interval",
@@ -215,16 +221,19 @@ if __name__ == "__main__":
     total_samples = builder.info.splits[EXAMPLE_DATASET["split"]].num_examples
     tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
 
-    print(total_samples, "\n\n")
+    print("TOTAL SAMPLE OF DATASET: ", total_samples, "\n\n")
     match args.model:
         case "Alibi":
             model = Model(Config(vocab_size=len(tokenizer)))
 
         case _:
             model = Model(Config(vocab_size=len(tokenizer)))
-
+    
+    total_samples = total_samples if args.dataset_limit is None else args.dataset_limit
+    test_train_ratio = 0.01 if args.validation_dataset_limit is None else args.validation_dataset_limit / total_samples
+    print(f"TOTAL SAMPLE OF DATASET: {total_samples} | TRAIN TEST RATIO: {test_train_ratio} | TEST EXAMPLES: {test_train_ratio * total_samples}\n\n")
     config = SFTConfig(
-        total_samples=total_samples if args.dataset_limit is None else args.dataset_limit,
+        total_samples=total_samples ,
         batch_size=args.batch_size,
         grad_accum_steps=args.grad_accum_steps,
         resume=args.resume,
@@ -236,6 +245,7 @@ if __name__ == "__main__":
         checkpoint_dir=args.checkpoint_dir,
         distributed=args.distributed,
         ddp_backend=args.backend,
+        test_train_ratio = test_train_ratio,
         vram_limit_mb=args.vram_limit_mb,
         max_temp=args.max_temp,
         cooldown_temp=args.cooldown_temp,
