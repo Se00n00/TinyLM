@@ -196,15 +196,15 @@ class MoE(nn.Module):
 
 @dataclass
 class Config:
-    num_layer: int = 8
+    num_layer: int = 12
     vocab_size: int = 30000
 
-    d_model: int = 768
-    num_heads: int = 12
+    d_model: int = 512
+    num_heads: int = 8
     dropout_prob: float = 0.1
 
     # Feedforward
-    ff_hidden_d: int | None = 1365
+    ff_hidden_d: int | None = 819
     ff_gated: bool = True
 
     # RMS Norm

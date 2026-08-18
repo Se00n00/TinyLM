@@ -80,7 +80,7 @@ def parse_arguments():
     parser.add_argument(
         "--vram_limit_mb",
         type=int,
-        default=4000,
+        default=30000,
         help="Target upper limit of VRAM usage in MB",
     )
     parser.add_argument(
