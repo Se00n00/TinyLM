@@ -277,11 +277,17 @@ class SFTTrainer(Trainer):
     
         if not dist.is_initialized():
             torch.cuda.set_device(local_rank)
+            device = (
+                torch.device("cuda", local_rank)
+                if torch.cuda.is_available()
+                else torch.device("cpu")
+            )
             dist.init_process_group(
                 backend=backend,
                 rank=rank,
                 world_size=world_size,
                 timeout=timedelta(seconds=config.ddp_timeout_seconds),
+                device_id=device,
             )
     
         return True, rank, local_rank, world_size
