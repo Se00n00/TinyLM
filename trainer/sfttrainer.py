@@ -497,22 +497,17 @@ class SFTTrainer(Trainer):
     
             consumed = 0
             t_initial = time.time()
-    
+            
+            total_iterations = (
+                self.config.total_samples // self.world_size
+                if self.is_ddp
+                else self.config.total_samples
+            )
             train_bar = tqdm(
-                desc="Training", dynamic_ncols=True, disable=not self.is_main_process
+                total=total_iterations, desc="Training", unit="ex", dynamic_ncols=True, disable=not self.is_main_process
             )
     
             try:
-                # Each rank only ever sees `total_samples / world_size`
-                # examples (since the dataset was pre-sharded in __init__),
-                # so the LR schedule's notion of "total iterations" needs to
-                # shrink accordingly to still reach `min_lr_ratio` at the
-                # same *wall-clock* point across all ranks.
-                total_iterations = (
-                    self.config.total_samples // self.world_size
-                    if self.is_ddp
-                    else self.config.total_samples
-                )
     
                 if self.config.resum_same_dataset == False and self.config.resume == True:
                     self.current_example = int(
@@ -669,17 +664,16 @@ class SFTTrainer(Trainer):
                         step_completed = True
     
                     if self.is_main_process:
-                        train_bar.update(1)
+                        train_bar.n = min(self.current_example, total_iterations)
+                        train_bar.refresh()
+
                     elapsed = time.time() - t_start
     
-                    if elapsed > 0 and self.is_main_process:
-                        batches_per_second = consumed / elapsed
-    
-                        train_bar.set_postfix(
-                            {
-                                "batch/s": f"{batches_per_second:.2f}",
-                            }
-                        )
+                    if self.is_main_process:
+                        postfix = {"remaining": max(0, total_iterations - self.current_example)}
+                        if elapsed > 0:
+                            postfix["batch/s"] = f"{consumed / elapsed:.2f}"
+                        train_bar.set_postfix(postfix)
     
                     # -------------------------------------------------------
                     # EVAL STEP/
@@ -694,8 +688,10 @@ class SFTTrainer(Trainer):
                             eval_steps = 0
                     
                             for batch in tqdm(
-                                self.get_batch(self.test_data, streaming=False),
+                                self.get_batch(self.test_data, streaming=False, count_examples=False),
                                 desc="Validation",
+                                total=len(self.test_data),
+                                unit="ex",
                             ):
                                 batch_x = batch["data"].to(self.device, non_blocking=True)
                                 batch_y = batch["labels"].to(self.device, non_blocking=True)
@@ -879,7 +875,7 @@ class SFTTrainer(Trainer):
                     train_bar.close()
                     raise e
     
-    def get_batch(self, DATASET, streaming=True):
+    def get_batch(self, DATASET, streaming=True, count_examples=True):
         """
         Creates a DataLoader for SFT training.
 
@@ -1033,7 +1029,8 @@ class SFTTrainer(Trainer):
                     "Dataset example must contain either 'messages' or 'text'."
                 )
 
-            self.current_example += 1
+            if count_examples:
+                self.current_example += 1
             return tokens, assistant_mask
 
         # ---------------------------------------------------------
