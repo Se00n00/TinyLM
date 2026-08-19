@@ -753,7 +753,7 @@ class SFTTrainer(Trainer):
                                 self.best_val_loss = val_loss
                                 checkpoint_path = os.path.join(
                                     self.config.checkpoint_dir,
-                                    f"{self.training_name}/model.pt",
+                                    f"{self.training_name}/best.pt",
                                 )
                                 torch.save(
                                     {
@@ -818,6 +818,26 @@ class SFTTrainer(Trainer):
                                 lr,
                                 grad_norm.item(),
                             ],
+                        )
+                        
+                        checkpoint_path = os.path.join(
+                            self.config.checkpoint_dir,
+                            f"{self.training_name}/model.pt",
+                        )
+                        torch.save(
+                            {
+                                "step": step,
+                                # Global row count consumed so far -
+                                # see `SFTTrainer.peek_checkpoint`.
+                                "current_example": self.current_example,
+                                # Save the *unwrapped* model so the
+                                # checkpoint loads cleanly whether or
+                                # not it's later resumed under DDP.
+                                "model_state_dict": self.raw_model.state_dict(),
+                                "optimizer_state_dict": self.optimizer.state_dict(),
+                                "run_meta": run_meta,
+                            },
+                            checkpoint_path,
                         )
     
                     step += 1
