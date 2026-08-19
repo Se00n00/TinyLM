@@ -30,3 +30,6 @@ Evaluation/results_GPT_PT.json
 
 ev/
 
+
+# STRAY MODEL
+*.pt
