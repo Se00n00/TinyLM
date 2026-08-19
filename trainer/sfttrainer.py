@@ -481,6 +481,8 @@ class SFTTrainer(Trainer):
                         self.current_example = checkpoint.get(
                             "current_example", self.current_example
                         )
+                        
+                        self.current_example =  self.current_example // self.world_size 
     
                     self.best_val_loss = checkpoint.get("val_loss", float("inf"))
     
