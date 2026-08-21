@@ -67,11 +67,17 @@ def process_ift_dataset(dataset):
             yield {"messages": conversation}
     
 def preprocess_rft(example):
+    answer = example['reasoning']
+    if len(answer.split("<think>", 1)) > 1:
+        reasoning = answer.split("<think>", 1)[1].split("</think>", 1)[0]
+        answer = answer.split("<think>", 1)[1].split("</think>", 1)[0]
+    else:
+        reasoning = ''
+        
     return {
         "messages": [
-            {"role": "system", "content": example["text"]},
-            {"role": "user", "content": example["text"]},
-            {"role": "assistant", "content": f"<|THINK|>{example['text']}<|THINK|>{example['text']}"},
+            {"role": "user", "content": example["prompt"]},
+            {"role": "assistant", "content": f"<|THINK|>{reasoning}<|/THINK|>{answer}"},
         ],
     }
 

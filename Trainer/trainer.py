@@ -212,10 +212,11 @@ from transformers import AutoTokenizer
 import os
 from Model.layers import Config
 from Model.models import Model
-from trainer import SFTConfig, SFTTrainer, process_ift_dataset
+from trainer import SFTConfig, SFTTrainer, process_ift_dataset, preprocess_rft
 
 PRE_DATASET = {"base": "HuggingFaceFW/fineweb-edu", "subset": "sample-10BT", "split": "train"}
 IFT_DATASET = {"base": "HuggingFaceH4/ultrachat_200k", "subset": None, "split": "train_sft"}
+RFT_DATASET = {"base": "Scale-or-Reason/general-reasoning-ift-pairs", "subset": None, "split": "reasoning_ift_pairs"}
 if __name__ == "__main__":
     args = parse_arguments()
     training_name = f"{args.training_name}_{args.pipeline}"
@@ -225,6 +226,9 @@ if __name__ == "__main__":
             DATASET = PRE_DATASET
         case 'IFT':
             DATASET = IFT_DATASET
+        
+        case 'RIFT':
+            DATASET = RFT_DATASET
         case _:
             DATASET = PRE_DATASET
     builder = load_dataset_builder(DATASET["base"], DATASET["subset"])
@@ -290,6 +294,8 @@ if __name__ == "__main__":
         case 'IFT':
             ds = IterableDataset.from_generator(process_ift_dataset, gen_kwargs={"dataset": ds},)
         
+        case 'RIFT':
+            ds = ds.map(preprocess_rft, remove_columns=list(ds.features.keys()))
         case 'PT':
             pass
             

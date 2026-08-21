@@ -627,7 +627,8 @@ class SFTTrainer(Trainer):
                                 self.optimizer.zero_grad(set_to_none=True)
                                 step_completed = False
                                 break
-    
+                            
+                                
                             loss_accum += raw_loss.item()
                             entropy_accum += batch_entropy
                             accuracy_accum += batch_accuracy
@@ -664,6 +665,11 @@ class SFTTrainer(Trainer):
     
                             consumed += 1
     
+                        if valid_micro_steps == 0:
+                            self.optimizer.zero_grad(set_to_none=True)
+                            step_completed = False
+                            continue
+                            
                         loss_accum /= GRAD_ACCUM_STEPS
                         entropy = entropy_accum / GRAD_ACCUM_STEPS
                         mean_token_accuracy = accuracy_accum / GRAD_ACCUM_STEPS
@@ -707,9 +713,9 @@ class SFTTrainer(Trainer):
                         self.model.eval()
                         val_loss = 0.0
                         val_entropy, val_mean_token_accuracy = 0.0, 0.0
-                    
                         if self.is_main_process:
                             total_eval_loss = 0.0
+                            total_valid_tokens = 0
                             eval_steps = 0
                     
                             for batch in tqdm(
@@ -720,7 +726,12 @@ class SFTTrainer(Trainer):
                             ):
                                 batch_x = batch["data"].to(self.device, non_blocking=True)
                                 batch_y = batch["labels"].to(self.device, non_blocking=True)
-                    
+                                
+                                valid_tokens = (batch_y != self.config.label_idx).sum()
+                                
+                                if valid_tokens.item() == 0:
+                                    continue
+                                
                                 with autocast(device_type=self.device.type, dtype=torch.float16):
                                     logits = self.raw_model(batch_x)
                                     loss = F.cross_entropy(
@@ -737,12 +748,23 @@ class SFTTrainer(Trainer):
                                     val_mean_token_accuracy += batch_mean_token_accuracy
                     
                                 total_eval_loss += loss.item()
+                                total_valid_tokens += valid_tokens.item()
+                                val_entropy += batch_entropy
+                                val_mean_token_accuracy += batch_mean_token_accuracy
                                 eval_steps += 1
-                    
-                            eval_steps = max(eval_steps, 1)
-                            val_entropy = val_entropy / eval_steps
-                            val_mean_token_accuracy = val_mean_token_accuracy / eval_steps
-                            val_loss = total_eval_loss / eval_steps
+                            
+                            if total_valid_tokens > 0:
+                                val_loss = total_eval_loss / total_valid_tokens
+                            else:
+                                val_loss = float("nan")
+                            
+                            if eval_steps > 0:
+                                val_entropy /= eval_steps
+                                val_mean_token_accuracy /= eval_steps
+                            else:
+                                val_entropy = float("nan")
+                                val_mean_token_accuracy = float("nan")
+                                
                     
                         global_current_example = self._reduce_sum(self.current_example)
                     
@@ -819,51 +841,49 @@ class SFTTrainer(Trainer):
                         self._barrier()
     
                     # TRAINING LOGGING: STEP, NUM_TOKENS, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY, LR, GRAD_NORM
-                    if (
-                        step % self.config.logging_steps == 0 or (EPOCH_COMPLETED == True)
-                    ) and self.is_main_process:
-                        train_ppl = (
-                            math.exp(loss_accum) if loss_accum < 1000 else float("inf")
-                        )
-    
-                        self.log_metrics(
-                            f"{self.config.checkpoint_dir}/{self.training_name}/logs_train.csv",
-                            [
-                                step,
-                                self.current_example
-                                * BATCH_SIZE
-                                * self.config.max_length
-                                * self.world_size,
-                                loss_accum,
-                                train_ppl,
-                                entropy,
-                                mean_token_accuracy,
-                                lr,
-                                grad_norm.item(),
-                            ],
-                        )
+                    if step % self.config.logging_steps == 0 or (EPOCH_COMPLETED == True):
                         
-                        checkpoint_path = os.path.join(
-                            self.config.checkpoint_dir,
-                            f"{self.training_name}/model.pt",
-                        )
-                        torch.save(
-                            {
-                                "step": step,
-                                # Global row count consumed so far -
-                                # see `SFTTrainer.peek_checkpoint`.
-                                "current_example": self._reduce_sum(self.current_example),
-                                # Save the *unwrapped* model so the
-                                # checkpoint loads cleanly whether or
-                                # not it's later resumed under DDP.
-                                "model_state_dict": self.raw_model.state_dict(),
-                                "optimizer_state_dict": self.optimizer.state_dict(),
-                                "run_meta": run_meta,
-                            },
-                            checkpoint_path,
-                        )
+                        global_current_example_log = self._reduce_sum(self.current_example)
+
+                        if self.is_main_process:
+                            train_ppl = (
+                                math.exp(loss_accum) if loss_accum < 1000 else float("inf")
+                            )
+
+                            self.log_metrics(
+                                f"{self.config.checkpoint_dir}/{self.training_name}/logs_train.csv",
+                                [
+                                    step,
+                                    self.current_example
+                                    * BATCH_SIZE
+                                    * self.config.max_length
+                                    * self.world_size,
+                                    loss_accum,
+                                    train_ppl,
+                                    entropy,
+                                    mean_token_accuracy,
+                                    lr,
+                                    grad_norm.item(),
+                                ],
+                            )
+
+                            checkpoint_path = os.path.join(
+                                self.config.checkpoint_dir,
+                                f"{self.training_name}/model.pt",
+                            )
+                            torch.save(
+                                {
+                                    "step": step,
+                                    # Global row count consumed so far -
+                                    # see `SFTTrainer.peek_checkpoint`.
+                                    "current_example": int(global_current_example_log),
+                                    "model_state_dict": self.raw_model.state_dict(),
+                                    "optimizer_state_dict": self.optimizer.state_dict(),
+                                    "run_meta": run_meta,
+                                },
+                                checkpoint_path,
+                            )
                     self._barrier()
-    
                     step += 1
                 if self.is_main_process:
                     print("\nTRAINING COMPLETE !")
