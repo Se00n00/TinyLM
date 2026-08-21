@@ -862,6 +862,7 @@ class SFTTrainer(Trainer):
                             },
                             checkpoint_path,
                         )
+                    self._barrier()
     
                     step += 1
                 if self.is_main_process:
