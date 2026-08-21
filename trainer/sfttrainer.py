@@ -573,12 +573,14 @@ class SFTTrainer(Trainer):
                     while not step_completed:
                         torch.cuda.empty_cache()
                         self.optimizer.zero_grad(set_to_none=True)
+                        
                         loss_accum = 0.0
                         entropy_accum = 0.0
                         accuracy_accum = 0.0
+                        valid_micro_steps = 0
     
                         self.check_vram_limit(self.config.vram_limit_mb, self.device)
-    
+                        
                         for micro_step in range(GRAD_ACCUM_STEPS):
                             global_micro_step = step * GRAD_ACCUM_STEPS + micro_step
     
@@ -592,6 +594,16 @@ class SFTTrainer(Trainer):
                             ):
                                 batch_x = batch["data"].to(self.device, non_blocking=True)
                                 batch_y = batch["labels"].to(self.device, non_blocking=True)
+                                
+                                valid_tokens = (batch_y != self.config.label_idx).sum()
+                                
+                                if valid_tokens.item() == 0:
+                                    continue
+                                
+                                valid_micro_steps += 1
+                                
+                                # print("valid target tokens:", valid_tokens.item())
+                                # print("labels shape:", batch_y.shape)
     
                                 logits = self.model(batch_x)
                                 raw_loss = F.cross_entropy(
@@ -604,6 +616,10 @@ class SFTTrainer(Trainer):
                                         logits, batch_y, self.config.label_idx
                                     )
                                 )
+                                
+                                # print("loss:", raw_loss)
+                                # print("requires_grad:", raw_loss.requires_grad)
+                                # print("grad_fn:", raw_loss.grad_fn)
     
                             if not torch.isfinite(raw_loss):
                                 if self.is_main_process:
@@ -625,13 +641,20 @@ class SFTTrainer(Trainer):
                             # on every micro-step wastes a lot of network
                             # bandwidth for no benefit. `model.no_sync()`
                             # disables the automatic all-reduce for all but
-                            # the last micro-step.
-                            is_last_micro_step = micro_step == GRAD_ACCUM_STEPS - 1
+                            is_last_micro_step = (
+                                valid_micro_steps == GRAD_ACCUM_STEPS
+                                or micro_step == GRAD_ACCUM_STEPS - 1
+                            )
+                        
                             sync_context = (
                                 self.model.no_sync()
-                                if (self.is_ddp and not is_last_micro_step)
+                                if self.is_ddp and not is_last_micro_step
                                 else _nullcontext()
-                            )
+                            )# the last micro-step.
+                            
+                            # is_last_micro_step = micro_step == GRAD_ACCUM_STEPS - 1
+                            
+                            
     
                             with sync_context:
                                 if self.config.ptdtype == torch.float16:
@@ -829,7 +852,7 @@ class SFTTrainer(Trainer):
                                 "step": step,
                                 # Global row count consumed so far -
                                 # see `SFTTrainer.peek_checkpoint`.
-                                "current_example": self.current_example,
+                                "current_example": self._reduce_sum(self.current_example),
                                 # Save the *unwrapped* model so the
                                 # checkpoint loads cleanly whether or
                                 # not it's later resumed under DDP.

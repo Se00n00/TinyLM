@@ -116,7 +116,9 @@ def parse_arguments():
         choices=[
             "PT",
             "IFT",
-            "PFT",
+            "TC", # Tool Calling
+            "RIFT", # Reasoning IFT
+            "RTC", # Reasoning Tool calling
         ],  # Pre-training, Instruction Finetunning, Preference Fine-Tunning
         default="PT",
         help="Pipeline process: pt, it,..",
@@ -203,22 +205,30 @@ PRETRAINING_HUGGINGFACE_DATASET = [
     },
 ]
 
-from datasets import load_dataset, load_dataset_builder
+from datasets import load_dataset, load_dataset_builder, IterableDataset
 
 # from Trainer.pretrainer import PreTrainer
 from transformers import AutoTokenizer
 import os
 from Model.layers import Config
 from Model.models import Model
-from trainer import SFTConfig, SFTTrainer
+from trainer import SFTConfig, SFTTrainer, process_ift_dataset
 
-EXAMPLE_DATASET = {"base": "HuggingFaceFW/fineweb-edu", "subset": "sample-10BT", "split": "train"}
+PRE_DATASET = {"base": "HuggingFaceFW/fineweb-edu", "subset": "sample-10BT", "split": "train"}
+IFT_DATASET = {"base": "HuggingFaceH4/ultrachat_200k", "subset": None, "split": "train_sft"}
 if __name__ == "__main__":
     args = parse_arguments()
     training_name = f"{args.training_name}_{args.pipeline}"
 
-    builder = load_dataset_builder(EXAMPLE_DATASET["base"], EXAMPLE_DATASET["subset"])
-    total_samples = builder.info.splits[EXAMPLE_DATASET["split"]].num_examples
+    match(args.pipeline):
+        case 'PT':
+            DATASET = PRE_DATASET
+        case 'IFT':
+            DATASET = IFT_DATASET
+        case _:
+            DATASET = PRE_DATASET
+    builder = load_dataset_builder(DATASET["base"], DATASET["subset"])
+    total_samples = builder.info.splits[DATASET["split"]].num_examples
     tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
 
     print("TOTAL SAMPLE OF DATASET: ", total_samples, "\n\n")
@@ -273,8 +283,19 @@ if __name__ == "__main__":
         )
     
     ds = load_dataset(
-        EXAMPLE_DATASET["base"], EXAMPLE_DATASET["subset"],  split=EXAMPLE_DATASET["split"], streaming=True
+        DATASET["base"], DATASET["subset"],  split=DATASET["split"], streaming=True
     )
+    
+    match(args.pipeline):
+        case 'IFT':
+            ds = IterableDataset.from_generator(process_ift_dataset, gen_kwargs={"dataset": ds},)
+        
+        case 'PT':
+            pass
+            
+        case _:
+            pass
+    
     if args.resum_same_dataset and row_offset > 0:
         ds = ds.skip(row_offset)
     

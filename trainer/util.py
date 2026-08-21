@@ -20,15 +20,52 @@ def preprocess_text_generation(example):
         "messages": {"text": example["text"]},
     }
 
-def preprocess_ift(example):
-    return {
-        "messages": [
-            {"role": "system", "content": example["text"]},
-            {"role": "user", "content": example["text"]},
-            {"role": "assistant", "content": example["text"]},
-        ],
-    }
+# def preprocess_ift(example):
+#     return {
+#         "messages": [
+#             {"role": "system", "content": example["text"]},
+#             {"role": "user", "content": example["text"]},
+#             {"role": "assistant", "content": example["text"]},
+#         ],
+#     }
 
+def process_ift(batch):
+    new_messages = []
+    
+    # Iterate through each multi-turn row in the dataset
+    for messages_list in batch["messages"]:
+        temp_message = []
+        for message in messages_list:
+            temp_message.append({"role": message["role"], "content": message['content']})
+            if message["role"] == 'assistant':
+                new_messages.append(temp_message)
+                temp_message = []
+    return {"messages": new_messages}
+
+def flatten_conversations(example):
+    new_messages = []
+    temp_message = []
+
+    for message in example["messages"]:
+        temp_message.append({
+            "role": message["role"],
+            "content": message["content"],
+        })
+
+        if message["role"] == "assistant":
+            new_messages.append(temp_message)
+            temp_message = []
+
+    return new_messages
+    
+
+def process_ift_dataset(dataset):
+    for example in dataset:
+        conversations = flatten_conversations(example)
+
+        for conversation in conversations:
+            yield {"messages": conversation}
+    
 def preprocess_rft(example):
     return {
         "messages": [
