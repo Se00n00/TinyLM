@@ -744,11 +744,9 @@ class SFTTrainer(Trainer):
                                             logits, batch_y, self.config.label_idx
                                         )
                                     )
-                                    val_entropy += batch_entropy
-                                    val_mean_token_accuracy += batch_mean_token_accuracy
                     
                                 total_eval_loss += loss.item()
-                                total_valid_tokens += valid_tokens.item()
+                                total_valid_tokens += 1
                                 val_entropy += batch_entropy
                                 val_mean_token_accuracy += batch_mean_token_accuracy
                                 eval_steps += 1
