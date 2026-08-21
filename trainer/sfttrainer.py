@@ -323,6 +323,24 @@ class SFTTrainer(Trainer):
         t = torch.tensor(float(value), dtype=torch.float64, device=self.device)
         dist.all_reduce(t, op=dist.ReduceOp.SUM)
         return t.item()
+    
+    def _all_ranks_out_of_data(self, local_out_of_data: bool) -> bool:
+        """
+        All-reduces a per-rank 'ran out of data' flag (MIN) so every rank
+        agrees on whether the WHOLE distributed epoch is over, not just
+        this rank's own shard. Must be called by every rank at the same
+        point in the loop, every micro-step - this is itself the
+        synchronization point that keeps ranks from diverging on
+        collective call count.
+        """
+        if not self.is_ddp:
+            return local_out_of_data
+    
+        t = torch.tensor(
+            0.0 if local_out_of_data else 1.0, device=self.device
+        )
+        dist.all_reduce(t, op=dist.ReduceOp.MIN)  # stays 1 only if EVERY rank still has data
+        return t.item() == 0.0
         
     def _barrier(self):
         if self.is_ddp:
@@ -585,9 +603,23 @@ class SFTTrainer(Trainer):
                             global_micro_step = step * GRAD_ACCUM_STEPS + micro_step
     
                             batch = next(Batches, None)
-                            if batch is None:
+                            local_out_of_data = batch is None
+                            all_out_of_data = self._all_ranks_out_of_data(local_out_of_data)
+                            if all_out_of_data:
                                 EPOCH_COMPLETED = True
                                 break
+                            if local_out_of_data:
+                                continue
+                            
+                            is_last_micro_step = (
+                                    valid_micro_steps == GRAD_ACCUM_STEPS - 1
+                                    or micro_step == GRAD_ACCUM_STEPS - 1
+                                )
+                            sync_context = (
+                                self.model.no_sync()
+                                if self.is_ddp and not is_last_micro_step
+                                else _nullcontext()
+                            )
     
                             with autocast(
                                 device_type=self.device.type, dtype=self.config.ptdtype
@@ -597,10 +629,6 @@ class SFTTrainer(Trainer):
                                 
                                 valid_tokens = (batch_y != self.config.label_idx).sum()
                                 
-                                if valid_tokens.item() == 0:
-                                    continue
-                                
-                                valid_micro_steps += 1
                                 
                                 # print("valid target tokens:", valid_tokens.item())
                                 # print("labels shape:", batch_y.shape)
@@ -617,6 +645,15 @@ class SFTTrainer(Trainer):
                                     )
                                 )
                                 
+                                if valid_tokens.item() == 0:
+                                    # still participate in the collective so ranks stay in lockstep,
+                                    # just contribute zero gradient
+                                    zero_loss = (logits.sum() * 0.0) / GRAD_ACCUM_STEPS
+                                    with sync_context:
+                                        zero_loss.backward()
+                                    consumed += 1
+                                    continue
+                                
                                 # print("loss:", raw_loss)
                                 # print("requires_grad:", raw_loss.requires_grad)
                                 # print("grad_fn:", raw_loss.grad_fn)
@@ -628,7 +665,8 @@ class SFTTrainer(Trainer):
                                 step_completed = False
                                 break
                             
-                                
+                            
+                            valid_micro_steps += 1
                             loss_accum += raw_loss.item()
                             entropy_accum += batch_entropy
                             accuracy_accum += batch_accuracy
@@ -668,6 +706,8 @@ class SFTTrainer(Trainer):
                         if valid_micro_steps == 0:
                             self.optimizer.zero_grad(set_to_none=True)
                             step_completed = False
+                            if EPOCH_COMPLETED:
+                                break
                             continue
                             
                         loss_accum /= GRAD_ACCUM_STEPS
