@@ -8,7 +8,7 @@ from datasets.arrow_dataset import Dataset
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-
+from typing import Dict
 # from Trainer.pretrainer import PreTrainer
 from transformers import AutoTokenizer
 
@@ -46,17 +46,32 @@ from rich.logging import RichHandler
 class Train:
     def __init__(self) -> None:
         args = self._parse_arguments()
-        self.training_name = f"{args.training_name}_{args.pipeline}"
+        self.training_name = args.training_name
         self.console = Console()
         self.train(args)
 
     def train(self, args) -> None:
 
+        # 1. Prepare Training MetaData: Training Details (from/to checkpoints), dataset details
+        os.makedirs(f"{args.checkpoint_dir}/{self.training_name}", exist_ok=True)
         config_path = os.path.join(BASE_DIR, "config.yaml")
+        training_path = os.path.join(f"{args.checkpoint_dir}/{self.training_name}", "training.yaml")
+        
         with open(config_path, "r") as file:
             data = yaml.safe_load(file)
-
-        # Load Tokenizer and model
+        
+        
+        if not os.path.exists(training_path):
+            open(training_path, "w").close()
+        
+        with open(training_path, "r+") as file:
+            training_info = yaml.safe_load(file)
+            
+            if training_info is None or args.resume is None:
+                training_info = self._initiallize_training_details(data, file)
+              
+        
+        # 2. Load Tokenizer and model
         tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
         match args.model:
             case "Alibi":
@@ -69,26 +84,30 @@ class Train:
         
         self._print_logo()
         
-        os.makedirs(f"{args.checkpoint_dir}/{self.training_name}", exist_ok=True)
+
         for pipeline in data["pipeline"]:
-            for dataset in data["dataset"][pipeline]:
+            for idx ,dataset in enumerate(data["dataset"][pipeline]):
                 
-                # PreLook the total samples of dataset and determine train and test samples
+                # Look Ahead the total samples of dataset and determine train and test samples
                 builder = load_dataset_builder(dataset["base"], dataset["subset"])
                 total_samples = builder.info.splits[dataset["split"]].num_examples
-                total_samples = 1000
-                training_samples = (
+                
+                new_total_samples = (
                     args.dataset_limit
                     if args.dataset_limit and dataset.get("limit") is None
                     else dataset.get("limit")
                     if dataset.get("limit")
-                    else args.dataset_limit
+                    else total_samples
                 )
                 test_train_ratio = (
                     0.01
                     if args.validation_dataset_limit is None
                     else args.validation_dataset_limit / total_samples
                 )
+                training_samples = int(new_total_samples* ( 100 - test_train_ratio))
+                
+                if  training_samples <= training_info['pipeline'][pipeline][idx]['trained'] or training_info['pipeline'][pipeline][idx]['completed']:
+                    continue
                 
                 self.console.print(
                     f"\t.\n\t \\__[bold dim white]PIPELINE:[/] {pipeline}\n"
@@ -101,10 +120,10 @@ class Train:
                 
                 # Initiallize Trainer
                 config = SFTConfig(
-                    total_samples=training_samples,
+                    total_samples=new_total_samples,
                     batch_size=args.batch_size,
                     grad_accum_steps=args.grad_accum_steps,
-                    resume=args.resume,
+                    resume=args.resume, # <--- TODO: 2 - Fix Re-caliberated arguments and other things
                     resum_same_dataset=args.resum_same_dataset,
                     learning_rate=args.learning_rate,
                     logging_steps=args.log_interval,
@@ -122,29 +141,21 @@ class Train:
                     gradient_checkpointing=args.gradient_checkpointing,
                 )
                 
-                resume_state = SFTTrainer.peek_checkpoint(config, self.training_name)
-                row_offset = resume_state["current_example"] if resume_state else 0
-                starting_current_example = row_offset if args.resum_same_dataset else 0
-        
-                if resume_state is not None:
-                    print(
-                        f"[Resume] Found checkpoint at step {resume_state['step']} "
-                        f"({row_offset} rows already consumed). "
-                        f"{'Skipping ahead in the dataset.' if args.resum_same_dataset else 'Restarting dataset from the beginning.'}"
-                    )
+                row_offset = training_info['pipeline'][pipeline][idx]['trained']
         
                 ds = load_dataset(
                     dataset["base"], dataset["subset"], split=dataset["split"], streaming=args.stream_dataset
                 )
-                ds = self._change_template(ds, pipeline)
+                ds = self._change_template(ds, pipeline, dataset) 
+                # TODO 1: Ensure Template for Non-streaming + a generallized template (use )
         
                 
         
-                if args.resum_same_dataset and row_offset > 0:
+                if row_offset > 0:
                     ds = ds.skip(row_offset)
         
-                if args.dataset_limit:
-                    ds.take(args.dataset_limit)
+                if dataset.get("limit", None):
+                    ds.take(dataset.get("limit"))
                     
                 trainer_kwargs = {
                     "training_name": self.training_name,
@@ -152,7 +163,7 @@ class Train:
                     "tokenizer": tokenizer,
                     "ds": ds,
                     "config": config,
-                    "current_example": starting_current_example,
+                    "current_example": row_offset + 1,
                 }
         
                 if (
@@ -165,7 +176,7 @@ class Train:
                     trainer = SFTTrainer(**trainer_kwargs)
                     trainer.train()
             
-    def _change_template(self, dataset:Dataset | IterableDataset, pipeline:str):
+    def _change_template(self, dataset:Dataset | IterableDataset, pipeline:str, dataset_config:Dict):
         match pipeline:
             case "IFT":
                 return IterableDataset.from_generator(
@@ -181,7 +192,33 @@ class Train:
 
             case _:
                 return dataset
-
+    
+    def _initiallize_training_details(self, data, file):
+            initial_data = {
+                "current_pipeline": data['pipeline'][0],
+                "current_example": 0,
+                "pipeline": {
+                    pipeline_name: [
+                        {
+                            "dataset": d['base'],
+                            "trained": 0,
+                            "validated": 0,
+                            "completed": False # Skips  Configuration complexity for skipping data
+                        } for d in data['dataset'][pipeline_name]
+                    ] for i, pipeline_name in enumerate(data['pipeline']) 
+                }
+            }
+            
+            file.seek(0)
+            yaml.dump(
+                initial_data,
+                file,
+                default_flow_style=False,
+                sort_keys=False,
+            )
+            file.truncate()
+            return initial_data
+            
     # -------------------------------------------------
     # CLI METHODS
     # -------------------------------------------------
@@ -192,164 +229,185 @@ class Train:
         self.console.print(logo)
         
     def _parse_arguments(self):
-        parser = argparse.ArgumentParser(description="CLI TinyLM Trainer")
-
-        parser.add_argument("--training_name", type=str)
-        parser.add_argument("--model", type=str, choices=["Alibi"], default="Alibi")
-
+        parser = argparse.ArgumentParser(
+            description="TinyLM CLI Trainer – train language models with flexible configuration for single- or multi-GPU setups."
+        )
+    
+        # ----------------------------------------------------------
+        # GENERAL
+        # ----------------------------------------------------------
+        parser.add_argument(
+            "--training_name",
+            type=str,
+            help="Unique name for this training run (used for logging, checkpoint naming, and experiment tracking).",
+        )
+        parser.add_argument(
+            "--model",
+            type=str,
+            choices=["Alibi"],
+            default="Alibi",
+            help="Model architecture to train. Currently only 'Alibi' is supported.",
+        )
+    
+        # ----------------------------------------------------------
         # LEARNING PARAMETERS
+        # ----------------------------------------------------------
         parser.add_argument(
             "--batch_size",
             type=int,
             default=1,
-            help="Micro-batch size",
+            help="Micro-batch size per GPU (number of sequences processed in one forward/backward pass).",
         )
         parser.add_argument(
             "--grad_accum_steps",
             type=int,
             default=4,
-            help="Gradient accumulation steps",
+            help="Number of micro-batches to accumulate gradients over before performing an optimizer step. "
+                 "Effective batch size = batch_size × grad_accum_steps × world_size.",
         )
         parser.add_argument(
-            "--max_steps", type=int, default=20000, help="Total training steps"
+            "--max_steps",
+            type=int,
+            default=20000,
+            help="Total number of optimizer steps to run. Training stops after this many steps.",
         )
         parser.add_argument(
-            "--complete_data",
-            type=bool,
-            default=False,
-            help="Train on Complete Dataset ?",
+            "--warmup_steps_ratio",
+            type=float,
+            default=0.10,
+            help="Fraction of total training steps used for learning-rate warmup (linear ramp from 0 to max LR). "
+                 "Example: 0.10 means the first 10%% of steps are warmup.",
         )
         parser.add_argument(
-            "--warmup_steps_ratio", type=float, default=0.10, help="LR warmup steps"
+            "--learning_rate",
+            type=float,
+            default=3e-4,
+            help="Peak (maximum) learning rate reached after warmup.",
         )
+        parser.add_argument(
+            "--weight_decay",
+            type=float,
+            default=0.1,
+            help="Weight decay (L2 regularization) coefficient applied by the optimizer.",
+        )
+        parser.add_argument(
+            "--disable_amp",
+            action="store_true",
+            help="Disable Automatic Mixed Precision (AMP). Training will run in full FP32 (slower, higher memory).",
+        )
+        parser.add_argument(
+            "--gradient_checkpointing",
+            action="store_true",
+            help="Enable gradient checkpointing at the start of training to reduce activation memory "
+                 "(trades compute for lower VRAM usage).",
+        )
+    
+        # ----------------------------------------------------------
+        # CHECKPOINTING & RESUME
+        # ----------------------------------------------------------
         parser.add_argument(
             "--checkpoint_dir",
             type=str,
             default="checkpoints",
-            help="Directory to save model checkpoints",
+            help="Directory where model checkpoints will be saved.",
         )
         parser.add_argument(
             "--resume",
-            type=str,
-            default=None,
-            help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
-        )
-        parser.add_argument(
-            "--resum_same_dataset",
             type=bool,
             default=False,
-            help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
+            help="Resume Training from already trained model (in checkpoint_dir) ?"
         )
-        parser.add_argument(
-            "--dataset_limit",
-            type=int,
-            default=None,
-            help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
-        )
+    
+        # ----------------------------------------------------------
+        # DATA
+        # ----------------------------------------------------------
         parser.add_argument(
             "--validation_dataset_limit",
             type=int,
             default=None,
-            help="Path to checkpoint to resume training from (or 'auto' to auto-detect best checkpoint)",
+            help="Maximum number of examples to use from the validation set. "
+                 "Useful for faster evaluation during development. None = use the full validation set.",
         )
         parser.add_argument(
             "--stream_dataset",
             type=bool,
             default=False,
-            help="train with streaming dataset ?",
+            help="If True, load the training dataset in streaming mode (lower memory, no full dataset caching).",
         )
         parser.add_argument(
-            "--learning_rate", type=float, default=3e-4, help="Max learning rate"
+            "--max_seq_len",
+            type=int,
+            default=512,
+            help="Maximum sequence length (in tokens) for both training and evaluation.",
         )
-        
-
+    
+        # ----------------------------------------------------------
         # LOGGING & EVALUATION
+        # ----------------------------------------------------------
         parser.add_argument(
-            "--eval_interval", type=int, default=2000, help="Steps between evaluations"
+            "--eval_interval",
+            type=int,
+            default=2000,
+            help="Run evaluation on the validation set every N optimizer steps.",
         )
         parser.add_argument(
             "--log_interval",
             type=int,
             default=20,
-            help="Steps between monitor model internals",
+            help="Log training metrics and monitor model internals every N optimizer steps.",
         )
-
-        # MODEL
-        parser.add_argument(
-            "--max_seq_len", type=int, default=512, help="Maximum Sequence length"
-        )
-
-        # MEMORY MANAGEMENT
+    
+        # ----------------------------------------------------------
+        # MEMORY & HARDWARE MANAGEMENT
+        # ----------------------------------------------------------
         parser.add_argument(
             "--vram_limit_mb",
             type=int,
             default=30000,
-            help="Target upper limit of VRAM usage in MB",
+            help="Soft upper limit for VRAM usage in megabytes. The trainer may adjust settings to stay under this limit.",
         )
         parser.add_argument(
             "--max_temp",
             type=int,
             default=75,
-            help="GPU Temperature threshold to trigger cooldown in °C",
+            help="GPU temperature (°C) at which a cooldown pause is triggered.",
         )
         parser.add_argument(
             "--cooldown_temp",
             type=int,
             default=60,
-            help="Target GPU Temperature to cool down to in °C",
+            help="Target GPU temperature (°C) to reach during cooldown before resuming training.",
         )
-
-        # LEARNING PARAMETERS
-        parser.add_argument(
-            "--disable_amp",
-            action="store_true",
-            help="Disable automatic mixed precision (AMP)",
-        )
-        parser.add_argument(
-            "--gradient_checkpointing",
-            action="store_true",
-            help="Start training with gradient checkpointing enabled",
-        )
-        parser.add_argument(
-            "--weight_decay", type=float, default=0.1, help="Weight Decay rate"
-        )
-        parser.add_argument(
-            "--pipeline",
-            type=str,
-            choices=[
-                "PT",
-                "IFT",
-                "TC",  # Tool Calling
-                "RIFT",  # Reasoning IFT
-                "RTC",  # Reasoning Tool calling
-            ],  # Pre-training, Instruction Finetunning, Preference Fine-Tunning
-            default="PT",
-            help="Pipeline process: pt, it,..",
-        )
-        # Distributed
+    
+        # ----------------------------------------------------------
+        # DISTRIBUTED TRAINING
+        # ----------------------------------------------------------
         parser.add_argument(
             "--distributed",
             type=str,
             default="none",
             choices=["none", "ddp"],
-            help="'ddp' enables multi-GPU training. If launched via `torchrun`, "
-            "this is mostly informational - torchrun already sets the env vars "
-            "SFTTrainer auto-detects. If launched as a plain `python train.py` "
-            "with --distributed ddp and --world_size > 1, this script instead "
-            "spawns the processes itself via SFTTrainer.launch().",
+            help="'ddp' enables multi-GPU DistributedDataParallel training. "
+                 "When launched via `torchrun`, this flag is mostly informational "
+                 "(environment variables are already set). "
+                 "When launched as a plain `python train.py` with --distributed ddp and --world_size > 1, "
+                 "the script will spawn the processes itself.",
         )
         parser.add_argument(
-            "--backend", type=str, default="nccl", choices=["nccl", "gloo"]
+            "--backend",
+            type=str,
+            default="nccl",
+            choices=["nccl", "gloo"],
+            help="Distributed communication backend. Prefer 'nccl' for multi-GPU NVIDIA setups; use 'gloo' for CPU or debugging.",
         )
         parser.add_argument(
             "--world_size",
             type=int,
             default=1,
-            help="Only used for the self-spawning (`mp.spawn`) path. When "
-            "launching with `torchrun --nproc_per_node=N`, N is what controls "
-            "world size instead - leave this at 1.",
+            help="Number of processes / GPUs for the self-spawning (mp.spawn) path. "
+                 "Ignored when launching with `torchrun --nproc_per_node=N` (N becomes the world size).",
         )
-
+    
         return parser.parse_args()
 
 
