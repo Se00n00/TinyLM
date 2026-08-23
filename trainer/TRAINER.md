@@ -1,6 +1,40 @@
+### Training Fresh New Run
+  
+  1. Edit `trainer/config.yaml` - Mention Pipeline in Sequence Manner + Dataset and config 
+  2. check chat template `_change_template` at `trainer/train.py`  
+  
+  ```bash
+  python -m  trainer.train \
+    --training_name PreTraining \
+    --batch_size 1 \
+    --grad_accum_steps 4 \
+    --max_seq_len 30000 \
+    --learning_rate 3e-4\
+    --stream_dataset True
+    --warmup_steps_ratio 0.10  --validation_dataset_limit 1000  # <--- Use Any of these
+    
+  ```
+### Resuming the Training or Training on New Pipeline
+  
+  1. Ensure configuration `<Checkpoint Dir>/ <Training_Name>/training.yaml` matches `trainer/config.yaml` 
+  2. Ensure `<Checkpoint Dir>/ <Training_Name>/training.yaml`'s pipeline content
+  
+  ```bash
+  python -m  trainer.train \
+    --training_name PreTraining \
+    --batch_size 1 \
+    --grad_accum_steps 4 \
+    --max_seq_len 30000 \
+    --learning_rate 3e-4 \
+    --stream_dataset True
+    --warmup_steps_ratio 0.10  --validation_dataset_limit 1000 \   # <--- Use Any of these
+    --resume auto
+  ```
+
+---
 ```bash
 python -m Trainer.trainer
-  --training_name Alibi_pretrain
+  --training_name Alibi_pretrain 
 ```
 
 ```bash

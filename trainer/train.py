@@ -118,13 +118,29 @@ class Train:
                     f"\t.\n\t \\__[bold dim white]TEST EXAMPLES:[/] {int(test_train_ratio * total_samples)}\n"
                 )
                 
+                row_offset = training_info['pipeline'][pipeline][idx]['trained']
+                ds = load_dataset(
+                    dataset["base"], dataset["subset"], split=dataset["split"], streaming=args.stream_dataset
+                )
+                ds = self._change_template(ds, pipeline, dataset) 
+        
+                
+        
+                if row_offset > 0:
+                    ds = ds.skip(row_offset)
+        
+                if dataset.get("limit", None):
+                    ds.take(dataset.get("limit"))
+                
                 # Initiallize Trainer
                 config = SFTConfig(
                     total_samples=new_total_samples,
+                    current_example= row_offset,
+                    global_example= training_info['global_current_example'],
                     batch_size=args.batch_size,
                     grad_accum_steps=args.grad_accum_steps,
                     resume=args.resume, # <--- TODO: 2 - Fix Re-caliberated arguments and other things
-                    resum_same_dataset=args.resum_same_dataset,
+                    # resum_same_dataset=args.resum_same_dataset,
                     learning_rate=args.learning_rate,
                     logging_steps=args.log_interval,
                     eval_steps=args.eval_interval,
@@ -141,29 +157,16 @@ class Train:
                     gradient_checkpointing=args.gradient_checkpointing,
                 )
                 
-                row_offset = training_info['pipeline'][pipeline][idx]['trained']
-        
-                ds = load_dataset(
-                    dataset["base"], dataset["subset"], split=dataset["split"], streaming=args.stream_dataset
-                )
-                ds = self._change_template(ds, pipeline, dataset) 
-                # TODO 1: Ensure Template for Non-streaming + a generallized template (use )
-        
-                
-        
-                if row_offset > 0:
-                    ds = ds.skip(row_offset)
-        
-                if dataset.get("limit", None):
-                    ds.take(dataset.get("limit"))
-                    
                 trainer_kwargs = {
                     "training_name": self.training_name,
+                    "training_config": training_info,
+                    "pipeline": pipeline,
+                    "dataset_name": dataset['base'],
+                    "pipeline"
                     "model": model,
                     "tokenizer": tokenizer,
                     "ds": ds,
-                    "config": config,
-                    "current_example": row_offset + 1,
+                    "config": config
                 }
         
                 if (
@@ -175,42 +178,55 @@ class Train:
                 else:
                     trainer = SFTTrainer(**trainer_kwargs)
                     trainer.train()
-            
+                
+                args.resume = "auto" # Enable Auto-resumption
+             
     def _change_template(self, dataset:Dataset | IterableDataset, pipeline:str, dataset_config:Dict):
         match pipeline:
             case "IFT":
-                return IterableDataset.from_generator(
-                    process_ift_dataset,
-                    gen_kwargs={"dataset": dataset},
+                return ( 
+                    IterableDataset.from_generator(
+                        process_ift_dataset,
+                        gen_kwargs={"dataset": dataset},
+                    ) if isinstance(dataset, IterableDataset)
+                    else Dataset.from_generator(
+                        process_ift_dataset,
+                        gen_kwargs={"dataset": dataset}
+                    )
                 )
 
             case "RFT":
                 return dataset.map(preprocess_rft, remove_columns=list(dataset.features.keys()))
             
+            # case "TC":
+            #     pass
+                
+            # case "RTC":
+            #     pass
+            
             case "PT":
                 return (
-                    dataset.map(preprocess_text_generation, fn_kwargs={"text_column":dataset_config["text_column"]}) 
+                    dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), fn_kwargs={"text_column":dataset_config["text_column"]}) 
                     if isinstance(dataset, Dataset)
-                    else dataset.map(preprocess_text_generation, gen_kwargs={"text_column":dataset_config["text_column"]}) 
+                    else dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), gen_kwargs={"text_column":dataset_config["text_column"]}) 
                 )
 
             case _: # Pre-training
                 return (
-                    dataset.map(preprocess_text_generation, fn_kwargs={"text_column":dataset_config["text_column"]}) 
+                    dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), fn_kwargs={"text_column":dataset_config["text_column"]}) 
                     if isinstance(dataset, Dataset)
-                    else dataset.map(preprocess_text_generation, gen_kwargs={"text_column":dataset_config["text_column"]}) 
+                    else dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), gen_kwargs={"text_column":dataset_config["text_column"]}) 
                 )
     
     def _initiallize_training_details(self, data, file):
             initial_data = {
                 "current_pipeline": data['pipeline'][0],
-                "current_example": 0,
+                "global_current_example": 0,
                 "pipeline": {
                     pipeline_name: [
                         {
                             "dataset": d['base'],
                             "trained": 0,
-                            "validated": 0,
                             "completed": False # Skips  Configuration complexity for skipping data
                         } for d in data['dataset'][pipeline_name]
                     ] for i, pipeline_name in enumerate(data['pipeline']) 
@@ -272,12 +288,6 @@ class Train:
             default=4,
             help="Number of micro-batches to accumulate gradients over before performing an optimizer step. "
                  "Effective batch size = batch_size × grad_accum_steps × world_size.",
-        )
-        parser.add_argument(
-            "--max_steps",
-            type=int,
-            default=20000,
-            help="Total number of optimizer steps to run. Training stops after this many steps.",
         )
         parser.add_argument(
             "--warmup_steps_ratio",

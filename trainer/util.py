@@ -84,10 +84,9 @@ def preprocess_rft(example):
 def preprocess_tc(example):
     return {
         "messages": [
-            {"role": "available_tools", "content": example["text"]},
-            {"role": "system", "content": example["text"]},
-            {"role": "user", "content": example["text"]},
-            {"role": "assistant", "content": f"<|TOOL_CALLS|>{example['text']}<|/TOOL_CALLS|>{example['text']}"},
+            {"role": "available_tools", "content": example["tools"]},
+            {"role": "system", "content": example["query"]},
+            {"role": "assistant", "content": f"<|TOOL_CALLS|>{example['answers']}<|/TOOL_CALLS|>"},
         ],
     }
 
@@ -96,7 +95,7 @@ def preprocess_rtc(example):
         "messages": [
             {"role": "available_tools", "content": example["text"]},
             {"role": "system", "content": example["text"]},
-            {"role": "user", "content": example["text"]},
+            {"role": "user", "content": example["query"]},
             {"role": "assistant", "content": f"<|THINK|>{example['text']}<|/THINK|><|TOOL_CALLS|>{example['text']}<|/TOOL_CALLS|>{example['text']}"},
         ],
     }
