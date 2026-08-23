@@ -67,7 +67,7 @@ class Train:
         with open(training_path, "r+") as file:
             training_info = yaml.safe_load(file)
             
-            if training_info is None or args.resume is None:
+            if training_info is None or not args.resume:
                 training_info = self._initiallize_training_details(data, file)
               
         
@@ -104,7 +104,7 @@ class Train:
                     if args.validation_dataset_limit is None
                     else args.validation_dataset_limit / total_samples
                 )
-                training_samples = int(new_total_samples* ( 100 - test_train_ratio))
+                training_samples = int(new_total_samples* ( 1 - test_train_ratio))
                 
                 if  training_samples <= training_info['pipeline'][pipeline][idx]['trained'] or training_info['pipeline'][pipeline][idx]['completed']:
                     continue
@@ -130,7 +130,7 @@ class Train:
                     ds = ds.skip(row_offset)
         
                 if dataset.get("limit", None):
-                    ds.take(dataset.get("limit"))
+                    ds = ds.take(dataset.get("limit"))
                 
                 # Initiallize Trainer
                 config = SFTConfig(
@@ -139,8 +139,7 @@ class Train:
                     global_example= training_info['global_current_example'],
                     batch_size=args.batch_size,
                     grad_accum_steps=args.grad_accum_steps,
-                    resume=args.resume, # <--- TODO: 2 - Fix Re-caliberated arguments and other things
-                    # resum_same_dataset=args.resum_same_dataset,
+                    resume=args.resume, 
                     learning_rate=args.learning_rate,
                     logging_steps=args.log_interval,
                     eval_steps=args.eval_interval,
@@ -162,7 +161,6 @@ class Train:
                     "training_config": training_info,
                     "pipeline": pipeline,
                     "dataset_name": dataset['base'],
-                    "pipeline"
                     "model": model,
                     "tokenizer": tokenizer,
                     "ds": ds,
@@ -331,8 +329,7 @@ class Train:
         )
         parser.add_argument(
             "--resume",
-            type=bool,
-            default=False,
+            action="store_true",
             help="Resume Training from already trained model (in checkpoint_dir) ?"
         )
     

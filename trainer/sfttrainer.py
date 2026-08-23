@@ -44,6 +44,7 @@ class SFTTrainer(Trainer):
         self.training_config = training_config
         self.dataset_name = dataset_name
         self.pipeline = pipeline
+        self.current_example = config.current_example
 
         (
             self.is_ddp,
@@ -228,6 +229,35 @@ class SFTTrainer(Trainer):
         )  # stays 1 only if EVERY rank still has data
         return t.item() == 0.0
 
+    def _any_rank_bad_loss(self, local_bad: bool) -> bool:
+        """
+        All-reduces a per-rank 'this rank's loss was non-finite' flag (MAX)
+        so every rank agrees on whether to abandon this micro-batch step,
+        instead of one rank silently skipping a collective call that the
+        others still expect.
+        """
+        if not self.is_ddp:
+            return local_bad
+    
+        t = torch.tensor(1.0 if local_bad else 0.0, device=self.device)
+        dist.all_reduce(t, op=dist.ReduceOp.MAX)
+        return t.item() == 1.0
+    
+    def _any_rank_oom(self, local_oom: bool) -> bool:
+        """
+        All-reduces a per-rank 'this rank just OOM'd' flag (MAX) so every
+        rank makes the same batch-size-shrink/bail decision on the same
+        iteration, instead of one rank recovering locally while the
+        others are still waiting inside a training collective it never
+        rejoins.
+        """
+        if not self.is_ddp:
+            return local_oom
+    
+        t = torch.tensor(1.0 if local_oom else 0.0, device=self.device)
+        dist.all_reduce(t, op=dist.ReduceOp.MAX)
+        return t.item() == 1.0
+        
     def _barrier(self):
         if self.is_ddp:
             dist.barrier()
@@ -517,8 +547,11 @@ class SFTTrainer(Trainer):
                             # print("requires_grad:", raw_loss.requires_grad)
                             # print("grad_fn:", raw_loss.grad_fn)
 
-                        if not torch.isfinite(raw_loss):
-                            if self.is_main_process:
+                        local_bad_loss = not torch.isfinite(raw_loss)
+                        any_bad_loss = self._any_rank_bad_loss(local_bad_loss)
+                        
+                        if any_bad_loss:
+                            if local_bad_loss and self.is_main_process:
                                 print("Non-finite loss encountered.")
                             self.optimizer.zero_grad(set_to_none=True)
                             step_completed = False
@@ -798,6 +831,9 @@ class SFTTrainer(Trainer):
                         config_data["pipeline"][self.pipeline][target_idx][
                             "completed"
                         ] = bool(EPOCH_COMPLETED)
+                        
+                        config_data['global_current_example'] += (self.config.logging_steps * self.world_size) if self.current_example > 0 else 0
+                        config_data['current_pipeline'] = self.pipeline
 
                         training_path = os.path.join(
                             f"{self.config.checkpoint_dir}/{self.training_name}",
@@ -813,61 +849,72 @@ class SFTTrainer(Trainer):
 
                     self._barrier()
                 step += 1
-
-            train_bar.close()
+            
+            if self.is_main_process:
+                train_bar.close()
+        
         except RuntimeError as e:
             tqdm.write(str(e))
             err_msg = str(e).lower()
-            if (
+            local_is_oom = (
                 "out of memory" in err_msg
                 or "memory limit" in err_msg
                 or "allowed memory" in err_msg
-            ):
-                if self.is_main_process:
-                    print(
-                        f"\n[Memory Guard] CUDA OOM or limit exceeded at step {step} with batch_size={BATCH_SIZE}, grad_accum_steps={GRAD_ACCUM_STEPS}."
-                    )
-                self.optimizer.zero_grad(set_to_none=True)
-                torch.cuda.empty_cache()
-
-                # IMPORTANT under DDP: if only *one* rank hits OOM while
-                # the others don't, they will diverge on batch size /
-                # grad_accum_steps below and the next collective op
-                # (gradient all-reduce) will hang or error out, since
-                # ranks must call the exact same sequence of collectives
-                # in lockstep. This basic recovery logic is kept
-                # per-rank for simplicity/parity with the original
-                # single-GPU version - for production multi-GPU use,
-                # consider detecting OOM via an all-reduce'd flag so
-                # every rank shrinks batch size together.
-                if BATCH_SIZE > 1:
-                    old_bs = BATCH_SIZE
-                    BATCH_SIZE = max(1, BATCH_SIZE // 2)
-                    GRAD_ACCUM_STEPS = EFFECTIVE_BATCH_SIZE // BATCH_SIZE
-                    if self.is_main_process:
-                        print(
-                            f"  [Memory Guard] Halving micro-batch size: {old_bs} -> {BATCH_SIZE}. Increasing grad_accum_steps to {GRAD_ACCUM_STEPS}."
-                        )
-                elif not getattr(self.raw_model, "gradient_checkpointing", False):
-                    if self.is_main_process:
-                        print(
-                            "  [Memory Guard] Micro-batch size is already 1. Enabling gradient checkpointing to save memory..."
-                        )
-                    self.raw_model.gradient_checkpointing = True
-                    # Reset batch size to original/default to try to recover with checkpointing
-                    BATCH_SIZE = self.config.batch_size
-                    GRAD_ACCUM_STEPS = self.config.grad_accum_steps
-                else:
-                    if self.is_main_process:
-                        print(
-                            "  [Memory Guard] Out of memory even with micro-batch size 1 and gradient checkpointing active."
-                        )
-
-                    train_bar.close()
-                    raise e
-            else:
+            )
+        
+            # Every rank must agree whether this was recoverable OOM,
+            # otherwise one rank could shrink+retry while others fall
+            # through to cleanup and hang the survivors on the next
+            # collective call.
+            any_oom = self._any_rank_oom(local_is_oom)
+        
+            if not any_oom:
+                # Non-OOM error on at least one rank: everyone raises
+                # together rather than leaving healthy ranks stuck in a
+                # collective the failing rank never rejoins.
                 train_bar.close()
                 raise e
+        
+            if self.is_main_process:
+                print(
+                    f"\n[Memory Guard] CUDA OOM or limit exceeded at step {step} "
+                    f"with batch_size={BATCH_SIZE}, grad_accum_steps={GRAD_ACCUM_STEPS}."
+                )
+            self.optimizer.zero_grad(set_to_none=True)
+            torch.cuda.empty_cache()
+            self._barrier()  # let every rank finish cleanup before retrying
+        
+            if BATCH_SIZE > 1:
+                old_bs = BATCH_SIZE
+                BATCH_SIZE = max(1, BATCH_SIZE // 2)
+                GRAD_ACCUM_STEPS = EFFECTIVE_BATCH_SIZE // BATCH_SIZE
+                if self.is_main_process:
+                    print(
+                        f"  [Memory Guard] Halving micro-batch size: {old_bs} -> {BATCH_SIZE}. "
+                        f"Increasing grad_accum_steps to {GRAD_ACCUM_STEPS}."
+                    )
+            elif not getattr(self.raw_model, "gradient_checkpointing", False):
+                if self.is_main_process:
+                    print(
+                        "  [Memory Guard] Micro-batch size is already 1. "
+                        "Enabling gradient checkpointing to save memory..."
+                    )
+                self.raw_model.gradient_checkpointing = True
+                BATCH_SIZE = self.config.batch_size
+                GRAD_ACCUM_STEPS = self.config.grad_accum_steps
+            else:
+                if self.is_main_process:
+                    print(
+                        "  [Memory Guard] Out of memory even with micro-batch size 1 "
+                        "and gradient checkpointing active."
+                    )
+                train_bar.close()
+                raise e
+        
+            # Re-enter the training loop with the adjusted settings instead
+            # of falling through — this is the part the original code never
+            # did, so "recovery" never actually resumed training.
+            return self._train_loop()
 
     def get_batch(self, DATASET, streaming=True, count_examples=True):
         """
