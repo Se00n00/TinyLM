@@ -7,10 +7,13 @@ from dataclasses import dataclass
 class SFTConfig:
     # MISC
     total_samples:int
+    current_example:int
+    global_example:int
     test_train_ratio: float = 0.01
     min_lr_ratio:float = 0.8
     max_test_rows:int = 10000
     label_idx:int = -100
+    
     
     # LEARNING PARAMETERS 
     batch_size: int = 2
@@ -54,8 +57,4 @@ class SFTConfig:
     # checkpoint saves or big eval sets on rank 0 can occasionally
     # trip the watchdog on other ranks, so it's exposed here.
     ddp_timeout_seconds: int = 1800
-    
-    # Whether the "GPU too hot" cooldown/backoff logic (check_and_cooldown_gpu)
-    # should be enforced per-rank (default) or only decided by rank 0 and
-    # then broadcast, to keep all ranks in lockstep. See note in trainer.
-    ddp_sync_cooldown: bool = True
+    ddp_sync_cooldown: bool = True # Enforce CoolDown for each distributed GPU

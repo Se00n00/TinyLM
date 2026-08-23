@@ -15,3 +15,8 @@ lm-eval
 
 # Pytorch --> Huggingface
 transformers
+
+
+# Trainer Module
+pyyaml
+rich

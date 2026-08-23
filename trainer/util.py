@@ -15,9 +15,9 @@ def get_lr(step, max_steps, learning_rate, warmup_steps=100, min_lr_ratio=0.1):
     return min_lr + coeff * (learning_rate - min_lr)
 
 
-def preprocess_text_generation(example):
+def preprocess_text_generation(example, text_column):
     return {
-        "messages": {"text": example["text"]},
+        "messages": {"text": example[text_column]},
     }
 
 # def preprocess_ift(example):
@@ -84,10 +84,9 @@ def preprocess_rft(example):
 def preprocess_tc(example):
     return {
         "messages": [
-            {"role": "available_tools", "content": example["text"]},
-            {"role": "system", "content": example["text"]},
-            {"role": "user", "content": example["text"]},
-            {"role": "assistant", "content": f"<|TOOL_CALLS|>{example['text']}<|/TOOL_CALLS|>{example['text']}"},
+            {"role": "available_tools", "content": example["tools"]},
+            {"role": "system", "content": example["query"]},
+            {"role": "assistant", "content": f"<|TOOL_CALLS|>{example['answers']}<|/TOOL_CALLS|>"},
         ],
     }
 
@@ -96,7 +95,7 @@ def preprocess_rtc(example):
         "messages": [
             {"role": "available_tools", "content": example["text"]},
             {"role": "system", "content": example["text"]},
-            {"role": "user", "content": example["text"]},
+            {"role": "user", "content": example["query"]},
             {"role": "assistant", "content": f"<|THINK|>{example['text']}<|/THINK|><|TOOL_CALLS|>{example['text']}<|/TOOL_CALLS|>{example['text']}"},
         ],
     }
