@@ -9,55 +9,66 @@ dataset:
       subset: "sample-10BT"
       split: train
       limit: NULL
+      text_column: text
     
     - base: "HuggingFaceFW/fineweb"
       subset: "sample-10BT"
       split: train
       limit: NULL
+      text_column: text
     
     - base: "bigcode/the-stack-v2"
       subset: "JSON"
       split: train
       limit: 5000
+      text_column: text
     
     - base: "bigcode/the-stack-v2"
       subset: "Shell"
       split: train
       limit: 5000
+      text_column: text
     
     - base: "HuggingFaceTB/smollm-corpus"
       subset: "cosmopedia-v2"
       split: train
       limit: NULL
+      text_column: text
     
     - base: "bigcode/the-stack-v2"
       subset: "API_Blueprint"
       split: train
       limit: 5000
+      text_column: text
     
     - base: "bigcode/the-stack-v2"
       subset: "Python"
       split: train
       limit: 5000
+      text_column: text
     
     - base: "emozilla/pg19"
       subset: NULL
       split: train
       limit: NULL
+      text_column: text
     
     - base: "HuggingFaceFW/fineweb"
       subset: "sample-10BT"
       split: train
       limit: NULL
+      text_column: text
   
   IFT:
     - base: "HuggingFaceH4/ultrachat_200k"
       subset: NULL
       split: train_sft
       limit: NULL
+      text_column: text
     
   RFT:
     - base: "Scale-or-Reason/general-reasoning-ift-pairs"
       subset: NULL
       split: reasoning_ift_pairs
       limit: NULL
+      text_column: text

@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 
 from Model.layers import Config
 from Model.models import Model
-from trainer import SFTConfig, SFTTrainer, preprocess_rft, process_ift_dataset
+from trainer import SFTConfig, SFTTrainer, preprocess_rft, process_ift_dataset, preprocess_text_generation
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -184,14 +184,22 @@ class Train:
                     gen_kwargs={"dataset": dataset},
                 )
 
-            case "RIFT":
+            case "RFT":
                 return dataset.map(preprocess_rft, remove_columns=list(dataset.features.keys()))
             
             case "PT":
-                return dataset
+                return (
+                    dataset.map(preprocess_text_generation, fn_kwargs={"text_column":dataset_config["text_column"]}) 
+                    if isinstance(dataset, Dataset)
+                    else dataset.map(preprocess_text_generation, gen_kwargs={"text_column":dataset_config["text_column"]}) 
+                )
 
-            case _:
-                return dataset
+            case _: # Pre-training
+                return (
+                    dataset.map(preprocess_text_generation, fn_kwargs={"text_column":dataset_config["text_column"]}) 
+                    if isinstance(dataset, Dataset)
+                    else dataset.map(preprocess_text_generation, gen_kwargs={"text_column":dataset_config["text_column"]}) 
+                )
     
     def _initiallize_training_details(self, data, file):
             initial_data = {

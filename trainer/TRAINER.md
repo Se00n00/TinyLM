@@ -69,3 +69,5 @@ Continuing from step 28601 with best val loss: 3.3547
 TOKENS/PARAMS:0.6880443483731362 : TRAIN TOKENS 120130675| VALIDATION TOKENS: 252059 | TOKENS/STEPS: 4096| STEPS/EPOCH: 29329
 DEVICE: cuda MODEL: Alibi| PARAMETERS:78.826171875| BATCH SIZE:2
 ----------------------------------------------------------------------------
+
+

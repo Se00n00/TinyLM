@@ -4,12 +4,12 @@ TinyLM's Trainer module
     - Contains classes for :
         SFTTrainer - Used for SFT, Pre-training, Reasoninig FineTunning, Function Calling
         [] PrefrenceTrainer - Used for prefernce training using - DPO, DRPO, RLVR
-    
+
     - Features:
         - Supports Distributed Training
         - Auto OOM recovery
         - learning-rate scheduler
-        - 
+        -
 
     - Supported Dataset Template
         - Text Genration
@@ -52,7 +52,7 @@ TinyLM's Trainer module
                     }
                 ]
             }
-            
+
             - Tool Calling
                 {
                     "messages":[{
@@ -84,7 +84,7 @@ TinyLM's Trainer module
                         ]<|/TOOL_CALLS|> ..."
                     }]
                 }
-                
+
             - Tool Calling + Reasoning
                 {
                     "messages":[
@@ -131,10 +131,12 @@ TinyLM's Trainer module
 """
 
 from .sfttrainer import SFTConfig, SFTTrainer
-from .util import process_ift_dataset,preprocess_rft
+from .util import preprocess_rft, preprocess_text_generation, process_ift_dataset
+
 __all__ = [
     "SFTConfig",
     "SFTTrainer",
     "process_ift_dataset",
-    "preprocess_rft"
+    "preprocess_rft",
+    "preprocess_text_generation",
 ]
