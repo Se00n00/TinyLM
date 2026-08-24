@@ -8,7 +8,7 @@ dataset:
     - base: "HuggingFaceFW/fineweb-edu"
       subset: "sample-10BT"
       split: train
-      limit: 100
+      limit: 1000
       learning_rate: 3e-4
       text_column: text
     
@@ -65,7 +65,7 @@ dataset:
     - base: "HuggingFaceH4/ultrachat_200k"
       subset: NULL
       split: train_sft
-      limit: 100
+      limit: 1000
       learning_rate: 1e-4
       text_column: text
     
@@ -73,6 +73,6 @@ dataset:
     - base: "Scale-or-Reason/general-reasoning-ift-pairs"
       subset: NULL
       split: reasoning_ift_pairs
-      limit: 100
+      limit: 1000
       learning_rate: 1e-5
       text_column: text
