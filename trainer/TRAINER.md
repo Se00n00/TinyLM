@@ -9,9 +9,9 @@
     --batch_size 1 \
     --grad_accum_steps 4 \
     --max_seq_len 30000 \
-    --learning_rate 3e-4\
-    --stream_dataset True
-    --warmup_steps_ratio 0.10  --validation_dataset_limit 1000  # <--- Use Any of these
+    --stream_dataset True \
+    --warmup_steps_ratio 0.10  # <---------------|
+    --validation_dataset_limit 1000  # <--- Use Any of these
     
   ```
 ### Resuming the Training or Training on New Pipeline
@@ -25,10 +25,10 @@
     --batch_size 1 \
     --grad_accum_steps 4 \
     --max_seq_len 30000 \
-    --learning_rate 3e-4 \
     --stream_dataset True
-    --warmup_steps_ratio 0.10  --validation_dataset_limit 1000 \   # <--- Use Any of these
-    --resume auto
+    --warmup_steps_ratio 0.10  # <---------------|
+    --validation_dataset_limit 1000 \   # <--- Use Any of these
+    --resume
   ```
 
 ---

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
-import datasets
+from datasets import NamedSplit
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -19,7 +19,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data import IterableDataset as TorchIterableDataset
 from tqdm import tqdm
-
+from typing import Any
 from .base import Trainer
 from .sftconfig import SFTConfig
 from .util import get_lr
@@ -36,6 +36,7 @@ class SFTTrainer(Trainer):
         tokenizer,
         ds: Dataset | HFIterableDataset,
         config: SFTConfig,
+        pre_resumption_pipeline:Any =None,
     ):
         self.training_name = training_name
         self.config = config
@@ -45,6 +46,7 @@ class SFTTrainer(Trainer):
         self.dataset_name = dataset_name
         self.pipeline = pipeline
         self.current_example = config.current_example
+        self.pre_resumption_pipeline = pre_resumption_pipeline
 
         (
             self.is_ddp,
@@ -73,8 +75,10 @@ class SFTTrainer(Trainer):
             test_ = ds.skip(self.train_samples)
             train_data = ds.take(self.train_samples)
 
-            test_data = Dataset.from_generator(lambda: (item for item in test_))
-
+            test_data = Dataset.from_generator(
+                lambda: (item for item in test_), 
+                split=NamedSplit("test")
+            )
             self.iterable_train_data = True
 
         if self.is_ddp:
@@ -120,7 +124,7 @@ class SFTTrainer(Trainer):
             self.init_csv(
                 f"{config.checkpoint_dir}/{training_name}/{self.pipeline}/logs_train.csv",
                 [
-                    "step",
+                    "global_step",
                     "num_examples",
                     "loss",
                     "perplexity",
@@ -133,7 +137,7 @@ class SFTTrainer(Trainer):
             self.init_csv(
                 f"{config.checkpoint_dir}/{training_name}/{self.pipeline}/logs_validation.csv",
                 [
-                    "step",
+                    "global_step",
                     "num_examples",
                     "loss",
                     "perplexity",
@@ -343,13 +347,10 @@ class SFTTrainer(Trainer):
         self.best_val_loss = float("inf")
 
         if self.config.resume:
-            resume_path = self.config.resume
-
-            if resume_path.lower() == "auto":
-                resume_path = os.path.join(
-                    self.config.checkpoint_dir,
-                    f"{self.training_name}/{self.pipeline}/model.pt",
-                )
+            resume_path = os.path.join(
+                self.config.checkpoint_dir,
+                f"{self.training_name}/{self.pre_resumption_pipeline}/model.pt",
+            )
 
             if os.path.exists(resume_path):
                 # map_location pins the checkpoint tensors to *this*
@@ -387,7 +388,7 @@ class SFTTrainer(Trainer):
                 )  # Current Example for Each
 
                 self.best_val_loss = checkpoint.get("val_loss", float("inf"))
-
+                print(f"\nRESUMING CHECKPOINT: {self.pre_resumption_pipeline}/model.pt | VAL LOSS: {self.best_val_loss} | CURRENT EXAMPLE: {self.current_example}")
             else:
                 if self.is_main_process:
                     print(
@@ -405,6 +406,19 @@ class SFTTrainer(Trainer):
         total_iterations = (
             self.train_samples // self.world_size if self.is_ddp else self.train_samples
         )
+        if self.is_main_process:
+            print(
+                "\n-------------------------------------------------------------------------"
+            )
+            print(
+                f"| DEVICE: {self.device.type} | PARAMETERS:{num_params / (1024 * 1024)}| "
+                f"BATCH SIZE:{BATCH_SIZE} | WORLD SIZE: {self.world_size} |"
+            )
+            print(
+                "-------------------------------------------------------------------------\n"
+            )
+        self._barrier()
+        
         train_bar = tqdm(
             total=total_iterations,
             desc="Training",
@@ -426,18 +440,7 @@ class SFTTrainer(Trainer):
                 "max_seq_len": self.config.max_length,
                 "learning_rate": self.config.learning_rate,
             }
-            if self.is_main_process:
-                print(
-                    "\n--------------------------------------------------------------------------"
-                )
-                print(
-                    f"DEVICE: {self.device.type} | PARAMETERS:{num_params / (1024 * 1024)}| "
-                    f"BATCH SIZE:{BATCH_SIZE} | WORLD SIZE: {self.world_size}"
-                )
-                print(
-                    "----------------------------------------------------------------------------\n"
-                )
-            self._barrier()
+            
             # ---------------------------------------------
             # TRAIN LOOP
             # ---------------------------------------------
@@ -446,6 +449,8 @@ class SFTTrainer(Trainer):
                 self.get_batch(self.train_data, streaming=self.iterable_train_data)
             )
             EPOCH_COMPLETED = False
+            prev_log_example = -1
+            prev_eval_example = -1
             while not EPOCH_COMPLETED:  # <-- Depends upon total_examples
                 # NOTE on DDP + GPU-temperature cooldown: this check runs
                 # per-rank against *that rank's own* GPU. If ranks are on
@@ -641,19 +646,20 @@ class SFTTrainer(Trainer):
                 # -------------------------------------------------------
                 # EVAL STEP/
                 # -------------------------------------------------------
-                if self.current_example % self.config.eval_steps == 0 or (
+                if self.current_example % self.config.eval_steps == 0 and self.current_example > 0 and prev_eval_example != self.current_example or (
                     EPOCH_COMPLETED == True
                 ):
                     self.model.eval()
                     val_loss = 0.0
                     val_entropy, val_mean_token_accuracy = 0.0, 0.0
+                    prev_eval_example = self.current_example
 
                     if self.is_main_process:
                         total_eval_loss = 0.0
                         total_valid_tokens = 0
                         eval_steps = 0
 
-                        val_pbar = tqdm(total=len(self.test_data), desc="Validation")
+                        val_pbar = tqdm(total=len(self.test_data), desc="Initial Validation" if self.current_example == 0 else "Validation")
                         for batch in self.get_batch(
                             self.test_data, streaming=False, count_examples=False
                         ):
@@ -763,8 +769,8 @@ class SFTTrainer(Trainer):
                         self.log_metrics(
                             f"{self.config.checkpoint_dir}/{self.training_name}/{self.pipeline}/logs_validation.csv",
                             [
-                                step,
-                                global_current_example,
+                                self.training_config['global_current_example'] + (self.config.logging_steps * self.world_size),
+                                int(global_current_example),
                                 val_loss,
                                 val_ppl,
                                 val_entropy,
@@ -777,9 +783,12 @@ class SFTTrainer(Trainer):
                     self._barrier()
 
                 # TRAINING LOGGING: STEP, NUM_TOKENS, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY, LR, GRAD_NORM
-                if self.current_example % self.config.logging_steps == 0 or (
+                # print(f"\nEXAMPLE: {self.current_example} | PREV_LOG_EXAMPLE: {prev_log_example} | LOG: {self.current_example % self.config.logging_steps == 0 and self.current_example != prev_log_example}\n")
+                if self.current_example % self.config.logging_steps == 0 and self.current_example != prev_log_example or (
                     EPOCH_COMPLETED == True
                 ):
+                    prev_log_example = self.current_example
+                    
                     global_current_example_log = self._reduce_sum(self.current_example)
 
                     if self.is_main_process:
@@ -790,8 +799,8 @@ class SFTTrainer(Trainer):
                         self.log_metrics(
                             f"{self.config.checkpoint_dir}/{self.training_name}/{self.pipeline}/logs_train.csv",
                             [
-                                step,
-                                global_current_example_log,
+                                self.training_config['global_current_example'] + (self.config.logging_steps * self.world_size),
+                                self.current_example * self.world_size,
                                 loss_accum,
                                 train_ppl,
                                 entropy,
@@ -832,6 +841,7 @@ class SFTTrainer(Trainer):
                             "completed"
                         ] = bool(EPOCH_COMPLETED)
                         
+                        # print(f"\n\nCURRENT EXAMPLE: {config_data['global_current_example']} | INCREMENT: {(self.config.logging_steps * self.world_size) if self.current_example > 0 else 0} | REAL GLOBAL EXAMPLE: {global_current_example_log} | EXPECTED {self.current_example * self.world_size}\n\n")
                         config_data['global_current_example'] += (self.config.logging_steps * self.world_size) if self.current_example > 0 else 0
                         config_data['current_pipeline'] = self.pipeline
 
@@ -853,6 +863,7 @@ class SFTTrainer(Trainer):
             if self.is_main_process:
                 train_bar.close()
         
+            # print(f"TIMES INCREMENTED: {incremented} | INCREMENT AMOUNT: {self.config.logging_steps * self.world_size}")
         except RuntimeError as e:
             tqdm.write(str(e))
             err_msg = str(e).lower()

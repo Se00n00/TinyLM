@@ -16,9 +16,7 @@ def get_lr(step, max_steps, learning_rate, warmup_steps=100, min_lr_ratio=0.1):
 
 
 def preprocess_text_generation(example, text_column):
-    return {
-        "messages": {"text": example[text_column]},
-    }
+    return {"text": example[text_column]}
 
 # def preprocess_ift(example):
 #     return {

@@ -93,9 +93,7 @@ class Train:
                 total_samples = builder.info.splits[dataset["split"]].num_examples
                 
                 new_total_samples = (
-                    args.dataset_limit
-                    if args.dataset_limit and dataset.get("limit") is None
-                    else dataset.get("limit")
+                    dataset.get("limit")
                     if dataset.get("limit")
                     else total_samples
                 )
@@ -107,6 +105,7 @@ class Train:
                 training_samples = int(new_total_samples* ( 1 - test_train_ratio))
                 
                 if  training_samples <= training_info['pipeline'][pipeline][idx]['trained'] or training_info['pipeline'][pipeline][idx]['completed']:
+                    print(f"Trained on {dataset['base']} ! Continuing on  NEXT\n")
                     continue
                 
                 self.console.print(
@@ -140,7 +139,7 @@ class Train:
                     batch_size=args.batch_size,
                     grad_accum_steps=args.grad_accum_steps,
                     resume=args.resume, 
-                    learning_rate=args.learning_rate,
+                    learning_rate=float(dataset.get('learning_rate',3e-4)),
                     logging_steps=args.log_interval,
                     eval_steps=args.eval_interval,
                     max_length=args.max_seq_len,
@@ -166,7 +165,11 @@ class Train:
                     "ds": ds,
                     "config": config
                 }
-        
+                
+                if args.resume:
+                    trainer_kwargs['pre_resumption_pipeline'] = training_info['current_pipeline']
+                
+                print(f"\n\n {training_info['global_current_example']}")
                 if (
                     args.distributed == "ddp"
                     and args.world_size > 1
@@ -177,7 +180,11 @@ class Train:
                     trainer = SFTTrainer(**trainer_kwargs)
                     trainer.train()
                 
-                args.resume = "auto" # Enable Auto-resumption
+                
+                print(f"\n\n {training_info['global_current_example']}")
+                args.resume = True # Enable Auto-resumption
+        
+        print("Congratulations ! Training Completed !")
              
     def _change_template(self, dataset:Dataset | IterableDataset, pipeline:str, dataset_config:Dict):
         match pipeline:
@@ -203,18 +210,11 @@ class Train:
             #     pass
             
             case "PT":
-                return (
-                    dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), fn_kwargs={"text_column":dataset_config["text_column"]}) 
-                    if isinstance(dataset, Dataset)
-                    else dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), gen_kwargs={"text_column":dataset_config["text_column"]}) 
-                )
+                return dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), fn_kwargs={"text_column":dataset_config["text_column"]}) 
+                    
 
             case _: # Pre-training
-                return (
-                    dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), fn_kwargs={"text_column":dataset_config["text_column"]}) 
-                    if isinstance(dataset, Dataset)
-                    else dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), gen_kwargs={"text_column":dataset_config["text_column"]}) 
-                )
+                return dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), fn_kwargs={"text_column":dataset_config["text_column"]}) 
     
     def _initiallize_training_details(self, data, file):
             initial_data = {
@@ -293,12 +293,6 @@ class Train:
             default=0.10,
             help="Fraction of total training steps used for learning-rate warmup (linear ramp from 0 to max LR). "
                  "Example: 0.10 means the first 10%% of steps are warmup.",
-        )
-        parser.add_argument(
-            "--learning_rate",
-            type=float,
-            default=3e-4,
-            help="Peak (maximum) learning rate reached after warmup.",
         )
         parser.add_argument(
             "--weight_decay",
