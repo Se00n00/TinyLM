@@ -169,7 +169,6 @@ class Train:
                 if args.resume:
                     trainer_kwargs['pre_resumption_pipeline'] = training_info['current_pipeline']
                 
-                print(f"\n\n {training_info['global_current_example']}")
                 if (
                     args.distributed == "ddp"
                     and args.world_size > 1
@@ -181,7 +180,6 @@ class Train:
                     trainer.train()
                 
                 
-                print(f"\n\n {training_info['global_current_example']}")
                 args.resume = True # Enable Auto-resumption
         
         print("Congratulations ! Training Completed !")
@@ -246,7 +244,7 @@ class Train:
     # -------------------------------------------------
     def _print_logo(self):
         f = Figlet(font="pagga")
-        logo = f.renderText(" TinyLM Trainer")
+        logo = f.renderText("TinyLM Trainer")
         self.console.print("\n")
         self.console.print(logo)
         
