@@ -68,29 +68,39 @@ class SFTTrainer(Trainer):
             self.test_samples = test_data.num_rows
             self.train_samples = train_data.num_rows
             self.iterable_train_data = False
-
+        
+            if self.is_ddp:
+                train_data = train_data.shard(
+                    num_shards=self.world_size, index=self.rank, contiguous=True
+                )
+        
         else:
-            self.test_samples = int(config.total_samples * config.test_train_ratio)
-            self.train_samples = config.total_samples - self.test_samples
-            test_ = ds.skip(self.train_samples)
-            train_data = ds.take(self.train_samples)
-
+            total_test = int(config.total_samples * config.test_train_ratio)
+            total_train = config.total_samples - total_test
+        
+            # Full, unsharded eval stream - only rank 0 ever iterates this.
+            test_ = ds.skip(total_train)
             test_data = Dataset.from_generator(
-                lambda: (item for item in test_), 
-                split=NamedSplit("test")
+                lambda: (item for item in test_), split=NamedSplit("test")
             )
+            self.test_samples = total_test
+        
+            train_stream = ds.take(total_train)
+        
+            if self.is_ddp:
+                per_rank = total_train // self.world_size
+                start = self.rank * per_rank
+                train_data = train_stream.skip(start).take(per_rank)
+                self.train_samples = per_rank
+            else:
+                train_data = train_stream
+                self.train_samples = total_train
+        
             self.iterable_train_data = True
-
-        if self.is_ddp:
-            train_data = train_data.shard(
-                num_shards=self.world_size, index=self.rank, contiguous=True
-            )
-            # test_data = test_data.shard(
-            #     num_shards=self.world_size, index=self.rank, contiguous=True
-            # )
+        
         self.train_data = train_data
         self.test_data = test_data
-
+        
         model.to(self.device)
 
         if self.is_ddp:
