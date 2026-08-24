@@ -707,6 +707,7 @@ class SFTTrainer(Trainer):
                             val_entropy = float("nan")
                             val_mean_token_accuracy = float("nan")
 
+                    print(f"VALIDATION: {self.local_rank}")
                     # Make sure no rank races ahead into more training
                     self._barrier()
 
@@ -777,7 +778,7 @@ class SFTTrainer(Trainer):
                                 val_mean_token_accuracy,
                             ],
                         )
-
+                    print(f"VALIDATION --> SAVING: {self.local_rank}")
                     # Make sure no rank races ahead into more training
                     # steps while rank 0 is still writing the checkpoint.
                     self._barrier()
@@ -856,7 +857,8 @@ class SFTTrainer(Trainer):
                                 sort_keys=False,
                                 default_flow_style=False,
                             )
-
+                    
+                    print(f"VALIDATION --> SAVING --> CONFIG & NORMAL SAVE: {self.local_rank}")
                     self._barrier()
                 step += 1
             
