@@ -20,7 +20,7 @@ class SFTConfig:
     grad_accum_steps: int = 16
     warmup_steps_ratio:float = 0.10 # 10 % of total steps
     checkpoint_dir:str = "checkpoints"
-    resume:str | None = None
+    resume:bool = False
     resum_same_dataset:bool = False
     learning_rate: float = 2e-5
     
