@@ -68,39 +68,26 @@ class SFTTrainer(Trainer):
             self.test_samples = test_data.num_rows
             self.train_samples = train_data.num_rows
             self.iterable_train_data = False
-            
-            if self.is_ddp:
-                train_data = train_data.shard(
-                    num_shards=self.world_size, index=self.rank, contiguous=True
-                )
+
         else:
             self.test_samples = int(config.total_samples * config.test_train_ratio)
             self.train_samples = config.total_samples - self.test_samples
             test_ = ds.skip(self.train_samples)
-            
+            train_data = ds.take(self.train_samples)
 
             test_data = Dataset.from_generator(
                 lambda: (item for item in test_), 
                 split=NamedSplit("test")
             )
-            
-            train_stream = ds.take(self.train_samples)
             self.iterable_train_data = True
 
-            if self.is_ddp:
-                # Do NOT call .shard() on a .take()-derived IterableDataset -
-                # it can collapse to fewer underlying source shards than
-                # world_size, and shard_data_sources() raises IndexError inside
-                # _merge_gen_kwargs. Slice with skip/take arithmetic instead,
-                # which works regardless of underlying shard count.
-                per_rank = self.train_samples // self.world_size
-                start = self.rank * per_rank
-                train_data = train_stream.skip(start).take(per_rank)
-                self.train_samples = per_rank
-            else:
-                train_data = train_stream
-                self.train_samples = self.train_samples
-                
+        if self.is_ddp:
+            train_data = train_data.shard(
+                num_shards=self.world_size, index=self.rank, contiguous=True
+            )
+            # test_data = test_data.shard(
+            #     num_shards=self.world_size, index=self.rank, contiguous=True
+            # )
         self.train_data = train_data
         self.test_data = test_data
 
@@ -339,6 +326,8 @@ class SFTTrainer(Trainer):
 
         trainer = SFTTrainer(**trainer_kwargs)
         trainer.train()
+        
+        os._exit(0)
 
     def init_csv(self, csv_path, cols):
         if not Path(csv_path).exists():
