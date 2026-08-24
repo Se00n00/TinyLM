@@ -85,9 +85,9 @@ class SFTTrainer(Trainer):
             train_data = train_data.shard(
                 num_shards=self.world_size, index=self.rank, contiguous=True
             )
-            test_data = test_data.shard(
-                num_shards=self.world_size, index=self.rank, contiguous=True
-            )
+            # test_data = test_data.shard(
+            #     num_shards=self.world_size, index=self.rank, contiguous=True
+            # )
         self.train_data = train_data
         self.test_data = test_data
 
@@ -261,6 +261,15 @@ class SFTTrainer(Trainer):
         t = torch.tensor(1.0 if local_oom else 0.0, device=self.device)
         dist.all_reduce(t, op=dist.ReduceOp.MAX)
         return t.item() == 1.0
+    
+    def _broadcast_int(self, value: int, src: int = 0) -> int:
+        """Broadcasts an int from `src` so every rank branches on an
+        identical value instead of its own possibly-drifted local counter."""
+        if not self.is_ddp:
+            return value
+        t = torch.tensor(int(value), dtype=torch.int64, device=self.device)
+        dist.broadcast(t, src=src)
+        return int(t.item())
         
     def _barrier(self):
         if self.is_ddp:
@@ -633,6 +642,8 @@ class SFTTrainer(Trainer):
                     train_bar.refresh()
 
                 elapsed = time.time() - t_start
+                
+                sync_example = self._broadcast_int(self.current_example, src=0)
 
                 if self.is_main_process:
                     postfix = {
@@ -646,20 +657,20 @@ class SFTTrainer(Trainer):
                 # -------------------------------------------------------
                 # EVAL STEP/
                 # -------------------------------------------------------
-                if self.current_example % self.config.eval_steps == 0 and self.current_example > 0 and prev_eval_example != self.current_example or (
+                if sync_example % self.config.eval_steps == 0 and sync_example > 0 and prev_eval_example != sync_example or (
                     EPOCH_COMPLETED == True
                 ):
                     self.model.eval()
                     val_loss = 0.0
                     val_entropy, val_mean_token_accuracy = 0.0, 0.0
-                    prev_eval_example = self.current_example
+                    prev_eval_example = sync_example
 
                     if self.is_main_process:
                         total_eval_loss = 0.0
                         total_valid_tokens = 0
                         eval_steps = 0
 
-                        val_pbar = tqdm(total=len(self.test_data), desc="Initial Validation" if self.current_example == 0 else "Validation")
+                        val_pbar = tqdm(total=len(self.test_data), desc="Initial Validation" if sync_example == 0 else "Validation")
                         for batch in self.get_batch(
                             self.test_data, streaming=False, count_examples=False
                         ):
@@ -707,6 +718,7 @@ class SFTTrainer(Trainer):
                             val_entropy = float("nan")
                             val_mean_token_accuracy = float("nan")
 
+                    print(f"VALIDATION: {self.local_rank}")
                     # Make sure no rank races ahead into more training
                     self._barrier()
 
@@ -731,7 +743,7 @@ class SFTTrainer(Trainer):
 
                     if self.is_main_process:
                         tqdm.write(
-                            f"Current Example {self.current_example} | "
+                            f"Current Example {sync_example} | "
                             f"Train Loss: {loss_accum:.4f} (PPL: {train_ppl:.2f}) | "
                             f"Val Loss: {val_loss:.4f} (PPL: {val_ppl:.2f}) | "
                             f"Grad Norm: {grad_norm:.2f} | "
@@ -777,17 +789,17 @@ class SFTTrainer(Trainer):
                                 val_mean_token_accuracy,
                             ],
                         )
-
+                    print(f"VALIDATION --> SAVING: {self.local_rank}")
                     # Make sure no rank races ahead into more training
                     # steps while rank 0 is still writing the checkpoint.
                     self._barrier()
 
                 # TRAINING LOGGING: STEP, NUM_TOKENS, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY, LR, GRAD_NORM
                 # print(f"\nEXAMPLE: {self.current_example} | PREV_LOG_EXAMPLE: {prev_log_example} | LOG: {self.current_example % self.config.logging_steps == 0 and self.current_example != prev_log_example}\n")
-                if self.current_example % self.config.logging_steps == 0 and self.current_example != prev_log_example or (
+                if sync_example % self.config.logging_steps == 0 and sync_example != prev_log_example or (
                     EPOCH_COMPLETED == True
                 ):
-                    prev_log_example = self.current_example
+                    prev_log_example = sync_example
                     
                     global_current_example_log = self._reduce_sum(self.current_example)
 
@@ -800,7 +812,7 @@ class SFTTrainer(Trainer):
                             f"{self.config.checkpoint_dir}/{self.training_name}/{self.pipeline}/logs_train.csv",
                             [
                                 self.training_config['global_current_example'] + (self.config.logging_steps * self.world_size),
-                                self.current_example * self.world_size,
+                                sync_example * self.world_size,
                                 loss_accum,
                                 train_ppl,
                                 entropy,
@@ -841,8 +853,8 @@ class SFTTrainer(Trainer):
                             "completed"
                         ] = bool(EPOCH_COMPLETED)
                         
-                        # print(f"\n\nCURRENT EXAMPLE: {config_data['global_current_example']} | INCREMENT: {(self.config.logging_steps * self.world_size) if self.current_example > 0 else 0} | REAL GLOBAL EXAMPLE: {global_current_example_log} | EXPECTED {self.current_example * self.world_size}\n\n")
-                        config_data['global_current_example'] += (self.config.logging_steps * self.world_size) if self.current_example > 0 else 0
+                        # print(f"\n\nCURRENT EXAMPLE: {config_data['global_current_example']} | INCREMENT: {(self.config.logging_steps * self.world_size) if sync_example > 0 else 0} | REAL GLOBAL EXAMPLE: {global_current_example_log} | EXPECTED {sync_example * self.world_size}\n\n")
+                        config_data['global_current_example'] += (self.config.logging_steps * self.world_size) if sync_example > 0 else 0
                         config_data['current_pipeline'] = self.pipeline
 
                         training_path = os.path.join(
@@ -856,7 +868,8 @@ class SFTTrainer(Trainer):
                                 sort_keys=False,
                                 default_flow_style=False,
                             )
-
+                    
+                    print(f"VALIDATION --> SAVING --> CONFIG & NORMAL SAVE: {self.local_rank}")
                     self._barrier()
                 step += 1
             
