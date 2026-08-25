@@ -2,22 +2,23 @@ pipeline:
   - PT
   - IFT
   - RFT
+  - TC
     
 dataset:
   PT:
     - base: "HuggingFaceFW/fineweb-edu"
       subset: "sample-10BT"
       split: train
-      limit: 1000
+      limit: 100 # 1000
       learning_rate: 3e-4
       text_column: text
     
-    - base: "HuggingFaceFW/fineweb"
-      subset: "sample-10BT"
-      split: train
-      limit: 1000
-      learning_rate: 3e-4
-      text_column: text
+    # - base: "HuggingFaceFW/fineweb"
+    #   subset: "sample-10BT"
+    #   split: train
+    #   limit: 100 # 1000
+    #   learning_rate: 3e-4
+    #   text_column: text
     
     - base: "bigcode/the-stack"
       data_dir: "data/json"
@@ -49,11 +50,11 @@ dataset:
       limit: 26276
       text_column: content
     
-    - base: "bigcode/the-stack"
-      data_dir: "data/markdown"
-      split: train
-      limit: 26276
-      text_column: content
+    # - base: "bigcode/the-stack"
+    #   data_dir: "data/markdown"
+    #   split: train
+    #   limit: 26276
+    #   text_column: content
     
     # - base: "emozilla/pg19"
     #   subset: NULL
@@ -71,7 +72,7 @@ dataset:
     - base: "HuggingFaceH4/ultrachat_200k"
       subset: NULL
       split: train_sft
-      limit: NULL
+      limit:  NULL
       learning_rate: 1e-4
     
   RFT:
@@ -79,6 +80,9 @@ dataset:
       subset: NULL
       split: reasoning_ift_pairs
       limit: 330000
+      max_seq_len: 1024
+      batch_size: 4
+      grad_accum_steps: 16
       learning_rate: 1e-5
   
   TC:
@@ -86,4 +90,7 @@ dataset:
       subset: NULL
       split: train
       limit: NULL
+      max_seq_len: 2048
+      batch_size: 1
+      grad_accum_steps: 16
       learning_rate: 1e-5

@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 
 from Model.layers import Config
 from Model.models import Model
-from trainer import SFTConfig, SFTTrainer, preprocess_rft, process_ift_dataset, preprocess_text_generation
+from trainer import SFTConfig, SFTTrainer, preprocess_rft, process_tc, process_ift_dataset, preprocess_text_generation
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -33,6 +33,10 @@ RFT_DATASET = {
     "subset": None,
     "split": "reasoning_ift_pairs",
 }
+token = os.getenv("HF_TOKEN")
+if not token:
+    print("\nWARNING ! Please Use Huggingface Token WhenEver Required !\n")
+
 
 import time
 from rich import print
@@ -43,7 +47,6 @@ import logging
 from rich.align import Align
 from rich.logging import RichHandler
 
-token = os.getenv("HF_TOKEN")
 
 class Train:
     def __init__(self) -> None:
@@ -91,16 +94,20 @@ class Train:
             for idx ,dataset in enumerate(data["dataset"][pipeline]):
                 
                 # Look Ahead the total samples of dataset and determine train and test samples
-                build_kwargs = {"path": dataset['base']}
-                if dataset['subset']:
+                build_kwargs = {"path": dataset['base'], "token":token}
+                if dataset.get('subset'):
                     build_kwargs['name'] = dataset['subset']
                 
-                if dataset['data_dir']:
+                if dataset.get('data_dir'):
                     build_kwargs['data_dir'] = dataset['data_dir']
                 
                 builder = load_dataset_builder(**build_kwargs)
-                total_samples = builder.info.splits[dataset["split"]].num_examples
-                
+                if builder.info.splits and dataset["split"] in builder.info.splits:
+                    total_samples = builder.info.splits[dataset["split"]].num_examples
+                else:
+                    # Falls back to counting the dataset dictionary directly if it's already loaded
+                    total_samples = 10000000000 
+                    
                 new_total_samples = (
                     dataset.get("limit")
                     if dataset.get("limit")
@@ -133,9 +140,9 @@ class Train:
                     "streaming": args.stream_dataset,
                     "token": token,
                 }
-                if dataset['subset']:
+                if dataset.get('subset'):
                     load_kwargs["name"] = dataset['subset']
-                if dataset['data_dir']:
+                if dataset.get('data_dir'):
                     load_kwargs["data_dir"] = dataset['data_dir']
                 ds = load_dataset(**load_kwargs)
                 ds = self._change_template(ds, pipeline, dataset) 
@@ -153,13 +160,13 @@ class Train:
                     total_samples=new_total_samples,
                     current_example= row_offset,
                     global_example= training_info['global_current_example'],
-                    batch_size=args.batch_size,
-                    grad_accum_steps=args.grad_accum_steps,
+                    batch_size= dataset.get('batch_size',args.batch_size),
+                    grad_accum_steps=dataset.get('grad_accum_steps',args.grad_accum_steps),
                     resume=args.resume, 
                     learning_rate=float(dataset.get('learning_rate',3e-4)),
                     logging_steps=args.log_interval,
                     eval_steps=args.eval_interval,
-                    max_length=args.max_seq_len,
+                    max_length= dataset.get('max_seq_len',args.max_seq_len),
                     checkpoint_dir=args.checkpoint_dir,
                     distributed=args.distributed,
                     ddp_backend=args.backend,
@@ -218,9 +225,9 @@ class Train:
             case "RFT":
                 return dataset.map(preprocess_rft, remove_columns=list(dataset.features.keys()))
             
-            # case "TC":
-            #     pass
-                
+            case "TC":
+                return dataset.map(process_tc, remove_columns=list(dataset.features.keys()))
+            
             # case "RTC":
             #     pass
             

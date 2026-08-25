@@ -2,6 +2,7 @@ import csv
 import math
 import os
 import time
+import json
 from ast import Pass
 from dataclasses import dataclass
 from datetime import timedelta
@@ -80,9 +81,14 @@ class SFTTrainer(Trainer):
         
             # Full, unsharded eval stream - only rank 0 ever iterates this.
             test_ = ds.skip(total_train)
-            test_data = Dataset.from_generator(
-                lambda: (item for item in test_), split=NamedSplit("test")
-            )
+            try:
+                test_data = Dataset.from_generator(
+                    lambda: (item for item in test_),
+                    split=NamedSplit("test"),
+                )
+            except (TypeError, OSError):
+                test_data = Dataset.from_list(list(test_))
+                
             self.test_samples = total_test
         
             train_stream = ds.take(total_train)
@@ -683,7 +689,7 @@ class SFTTrainer(Trainer):
                 # -------------------------------------------------------
                 # EVAL STEP/
                 # -------------------------------------------------------
-                if sync_example % self.config.eval_steps == 0 and sync_example > 0 and prev_eval_example != sync_example or (
+                if ( sync_example % self.config.eval_steps == 0 and sync_example > 0 and prev_eval_example != sync_example ) or (
                     EPOCH_COMPLETED == True
                 ):
                     self.model.eval()
@@ -822,7 +828,7 @@ class SFTTrainer(Trainer):
 
                 # TRAINING LOGGING: STEP, NUM_TOKENS, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY, LR, GRAD_NORM
                 # print(f"\nEXAMPLE: {self.current_example} | PREV_LOG_EXAMPLE: {prev_log_example} | LOG: {self.current_example % self.config.logging_steps == 0 and self.current_example != prev_log_example}\n")
-                if sync_example % self.config.logging_steps == 0 and sync_example != prev_log_example or (
+                if ( sync_example % self.config.logging_steps == 0 and sync_example != prev_log_example ) or (
                     EPOCH_COMPLETED == True
                 ):
                     prev_log_example = sync_example
@@ -1033,6 +1039,8 @@ class SFTTrainer(Trainer):
                         ),
                         None,
                     )
+                    if tools:
+                        tools = json.loads(tools)
 
                     chat_messages = [
                         msg for msg in messages if msg.get("role") != "available_tools"

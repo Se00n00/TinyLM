@@ -58,12 +58,29 @@ def flatten_conversations(example):
     return new_messages
     
 
+# def process_ift_dataset(dataset):
+#     for example in dataset:
+#         conversations = flatten_conversations(example)
+
+#         for conversation in conversations:
+#             yield {"messages": conversation}
+            
 def process_ift_dataset(dataset):
     for example in dataset:
-        conversations = flatten_conversations(example)
+        messages = example.get("messages")
 
-        for conversation in conversations:
-            yield {"messages": conversation}
+        if not messages:
+            continue
+
+        yield {
+            "messages": [
+                {
+                    "role": message["role"],
+                    "content": message.get("content", ""),
+                }
+                for message in messages
+            ]
+        }
     
 def preprocess_rft(example):
     answer = example['reasoning']
@@ -106,16 +123,15 @@ def process_tc(example):
     messages = json.loads(example["messages"])
     functions = json.loads(example["functions"])
 
-    processed = [
-        {
-            "role": "available_tools",
-            "content": json.dumps(
-                functions,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            ),
-        }
-    ]
+    processed = []
+    # {
+    #     "role": "available_tools",
+    #     "content": json.dumps(
+    #         functions,
+    #         ensure_ascii=False,
+    #         separators=(",", ":"),
+    #     ),
+    # }
 
     for msg in messages:
         role = msg["role"]
