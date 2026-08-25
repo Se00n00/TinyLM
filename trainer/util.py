@@ -1,3 +1,4 @@
+from ast import Pass
 import math
 
 def get_lr(step, max_steps, learning_rate, warmup_steps=100, min_lr_ratio=0.1):
@@ -96,4 +97,64 @@ def preprocess_rtc(example):
             {"role": "user", "content": example["query"]},
             {"role": "assistant", "content": f"<|THINK|>{example['text']}<|/THINK|><|TOOL_CALLS|>{example['text']}<|/TOOL_CALLS|>{example['text']}"},
         ],
+    }
+
+import json
+
+
+def process_tc(example):
+    messages = json.loads(example["messages"])
+    functions = json.loads(example["functions"])
+
+    processed = [
+        {
+            "role": "available_tools",
+            "content": json.dumps(
+                functions,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        }
+    ]
+
+    for msg in messages:
+        role = msg["role"]
+        content = msg.get("content", "")
+
+        if role == "system":
+            processed.append({
+                "role": "system",
+                "content": content,
+            })
+
+        elif role == "user":
+            processed.append({
+                "role": "user",
+                "content": content,
+            })
+
+        elif role == "function_call":
+            processed.append({
+                "role": "assistant",
+                "content": (
+                    "<|TOOL_CALLS|>"
+                    + content
+                    + "<|/TOOL_CALLS|>"
+                ),
+            })
+
+        elif role == "function_response":
+            processed.append({
+                "role": "tool",
+                "content": content,
+            })
+
+        elif role == "assistant":
+            processed.append({
+                "role": "assistant",
+                "content": content,
+            })
+
+    return {
+        "messages": processed
     }

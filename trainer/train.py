@@ -43,6 +43,8 @@ import logging
 from rich.align import Align
 from rich.logging import RichHandler
 
+token = os.getenv("HF_TOKEN")
+
 class Train:
     def __init__(self) -> None:
         args = self._parse_arguments()
@@ -89,7 +91,14 @@ class Train:
             for idx ,dataset in enumerate(data["dataset"][pipeline]):
                 
                 # Look Ahead the total samples of dataset and determine train and test samples
-                builder = load_dataset_builder(dataset["base"], dataset["subset"])
+                build_kwargs = {"path": dataset['base']}
+                if dataset['subset']:
+                    build_kwargs['name'] = dataset['subset']
+                
+                if dataset['data_dir']:
+                    build_kwargs['data_dir'] = dataset['data_dir']
+                
+                builder = load_dataset_builder(**build_kwargs)
                 total_samples = builder.info.splits[dataset["split"]].num_examples
                 
                 new_total_samples = (
@@ -118,9 +127,17 @@ class Train:
                 )
                 
                 row_offset = training_info['pipeline'][pipeline][idx]['trained']
-                ds = load_dataset(
-                    dataset["base"], dataset["subset"], split=dataset["split"], streaming=args.stream_dataset
-                )
+                load_kwargs = {
+                    "path": dataset["base"],
+                    "split": dataset["split"],
+                    "streaming": args.stream_dataset,
+                    "token": token,
+                }
+                if dataset['subset']:
+                    load_kwargs["name"] = dataset['subset']
+                if dataset['data_dir']:
+                    load_kwargs["data_dir"] = dataset['data_dir']
+                ds = load_dataset(**load_kwargs)
                 ds = self._change_template(ds, pipeline, dataset) 
         
                 

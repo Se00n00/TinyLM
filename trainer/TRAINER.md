@@ -105,3 +105,12 @@ DEVICE: cuda MODEL: Alibi| PARAMETERS:78.826171875| BATCH SIZE:2
 ----------------------------------------------------------------------------
 
 
+SFTTrainer 
+
+```python
+    for examples in DATASET:
+        Y_pred = model(X)
+        loss = (Y_pred, Y)
+        
+        loss.backward()
+```

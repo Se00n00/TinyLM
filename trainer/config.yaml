@@ -19,17 +19,17 @@ dataset:
       learning_rate: 3e-4
       text_column: text
     
-    # - base: "bigcode/the-stack-v2"
-    #   subset: "JSON"
-    #   split: train
-    #   limit: 100
-    #   text_column: text
+    - base: "bigcode/the-stack"
+      data_dir: "data/json"
+      split: train
+      limit: 10971
+      text_column: content
     
-    # - base: "bigcode/the-stack-v2"
-    #   subset: "Shell"
-    #   split: train
-    #   limit: 100
-    #   text_column: text
+    - base: "bigcode/the-stack"
+      data_dir: "data/shell"
+      split: train
+      limit: 98756
+      text_column: content
     
     # - base: "HuggingFaceTB/smollm-corpus"
     #   subset: "cosmopedia-v2"
@@ -37,17 +37,23 @@ dataset:
     #   limit: 100
     #   text_column: text
     
-    # - base: "bigcode/the-stack-v2"
-    #   subset: "API_Blueprint"
-    #   split: train
-    #   limit: 100
-    #   text_column: text
+    - base: "bigcode/the-stack"
+      data_dir: "data/api-blueprint"
+      split: train
+      limit: 3312
+      text_column: content
     
-    # - base: "bigcode/the-stack-v2"
-    #   subset: "Python"
-    #   split: train
-    #   limit: 100
-    #   text_column: text
+    - base: "bigcode/the-stack"
+      data_dir: "data/python"
+      split: train
+      limit: 26276
+      text_column: content
+    
+    - base: "bigcode/the-stack"
+      data_dir: "data/markdown"
+      split: train
+      limit: 26276
+      text_column: content
     
     # - base: "emozilla/pg19"
     #   subset: NULL
@@ -65,14 +71,19 @@ dataset:
     - base: "HuggingFaceH4/ultrachat_200k"
       subset: NULL
       split: train_sft
-      limit: 1000
+      limit: NULL
       learning_rate: 1e-4
-      text_column: text
     
   RFT:
     - base: "Scale-or-Reason/general-reasoning-ift-pairs"
       subset: NULL
       split: reasoning_ift_pairs
-      limit: 1000
+      limit: 330000
       learning_rate: 1e-5
-      text_column: text
+  
+  TC:
+    - base: "korotkov/glaive-function-calling-v2-parsed"
+      subset: NULL
+      split: train
+      limit: NULL
+      learning_rate: 1e-5
