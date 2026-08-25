@@ -81,13 +81,15 @@ class SFTTrainer(Trainer):
         
             # Full, unsharded eval stream - only rank 0 ever iterates this.
             test_ = ds.skip(total_train)
-            try:
-                test_data = Dataset.from_generator(
-                    lambda: (item for item in test_),
-                    split=NamedSplit("test"),
-                )
-            except (TypeError, OSError):
-                test_data = Dataset.from_list(list(test_))
+            test_items = list(test_)
+            self.test_samples = len(test_items)
+            
+            if len(test_items) > 0:
+                test_data = Dataset.from_list(test_items)
+            else:
+                # No exception here either way — `Dataset.from_list([])` still hits
+                # SchemaInferenceError with zero examples unless you hand it features.
+                test_data = Dataset.from_list([], features=ds.features)
                 
             self.test_samples = total_test
         

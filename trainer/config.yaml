@@ -38,17 +38,17 @@ dataset:
     #   limit: 100
     #   text_column: text
     
-    - base: "bigcode/the-stack"
-      data_dir: "data/api-blueprint"
-      split: train
-      limit: 3312
-      text_column: content
+    # - base: "bigcode/the-stack"
+    #   data_dir: "data/api-blueprint"
+    #   split: train
+    #   limit: 3312
+    #   text_column: content
     
-    - base: "bigcode/the-stack"
-      data_dir: "data/python"
-      split: train
-      limit: 26276
-      text_column: content
+    # - base: "bigcode/the-stack"
+    #   data_dir: "data/python"
+    #   split: train
+    #   limit: 26276
+    #   text_column: content
     
     # - base: "bigcode/the-stack"
     #   data_dir: "data/markdown"
