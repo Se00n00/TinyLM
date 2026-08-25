@@ -91,7 +91,7 @@ class SFTTrainer(Trainer):
                 per_rank = total_train // self.world_size
                 start = self.rank * per_rank
                 train_data = train_stream.skip(start).take(per_rank)
-                self.train_samples = per_rank
+                self.train_samples = total_train
             else:
                 train_data = train_stream
                 self.train_samples = total_train
@@ -336,6 +336,20 @@ class SFTTrainer(Trainer):
 
         trainer = SFTTrainer(**trainer_kwargs)
         trainer.train()
+        
+        del trainer
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            torch.cuda.empty_cache()
+    
+        # Run multiprocessing's own atexit cleanup explicitly - this is what
+        # unlinks the semaphores mp.spawn's process-sync primitives created.
+        # os._exit() below skips atexit entirely, which is what caused the
+        # "leaked semaphore objects" warning once we started using it.
+        import multiprocessing.util
+        multiprocessing.util._exit_function()
         
         os._exit(0)
 
@@ -730,7 +744,7 @@ class SFTTrainer(Trainer):
                             val_entropy = float("nan")
                             val_mean_token_accuracy = float("nan")
 
-                    print(f"VALIDATION: {self.local_rank}")
+                    # print(f"VALIDATION: {self.local_rank}")
                     # Make sure no rank races ahead into more training
                     self._barrier()
 
@@ -801,7 +815,7 @@ class SFTTrainer(Trainer):
                                 val_mean_token_accuracy,
                             ],
                         )
-                    print(f"VALIDATION --> SAVING: {self.local_rank}")
+                    # print(f"VALIDATION --> SAVING: {self.local_rank}")
                     # Make sure no rank races ahead into more training
                     # steps while rank 0 is still writing the checkpoint.
                     self._barrier()
@@ -881,7 +895,7 @@ class SFTTrainer(Trainer):
                                 default_flow_style=False,
                             )
                     
-                    print(f"VALIDATION --> SAVING --> CONFIG & NORMAL SAVE: {self.local_rank}")
+                    # print(f"VALIDATION --> SAVING --> CONFIG & NORMAL SAVE: {self.local_rank}")
                     self._barrier()
                 step += 1
             
