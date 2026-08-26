@@ -21,9 +21,9 @@ from torch.utils.data import DataLoader
 from torch.utils.data import IterableDataset as TorchIterableDataset
 from tqdm import tqdm
 from typing import Any
-from .base import Trainer
-from .sftconfig import SFTConfig
-from .util import get_lr
+from trainer.base import Trainer
+from trainer.sfttrainer.sftconfig import SFTConfig
+from trainer.util import get_lr
 
 
 class SFTTrainer(Trainer):
@@ -905,6 +905,47 @@ class SFTTrainer(Trainer):
                     
                     # print(f"VALIDATION --> SAVING --> CONFIG & NORMAL SAVE: {self.local_rank}")
                     self._barrier()
+                
+                # -------------------------------------------------------
+                # FINAL CHECKPOINT — ALWAYS SAVE WHEN EPOCH COMPLETES
+                # -------------------------------------------------------
+                if EPOCH_COMPLETED:
+                    self._barrier()
+                
+                    if self.is_main_process:
+                        final_checkpoint_path = os.path.join(
+                            self.config.checkpoint_dir,
+                            f"{self.training_name}/{self.pipeline}/model.pt",
+                        )
+                
+                        final_tmp_path = final_checkpoint_path + ".tmp"
+                
+                        checkpoint = {
+                            "step": step,
+                            "val_loss": self.best_val_loss,
+                            "current_example": int(
+                                self._reduce_sum(self.current_example)
+                            ),
+                            "model_state_dict": self.raw_model.state_dict(),
+                            "optimizer_state_dict": self.optimizer.state_dict(),
+                            "run_meta": run_meta,
+                        }
+                
+                        # Write temporary file first
+                        torch.save(checkpoint, final_tmp_path)
+                
+                        # Atomic replacement
+                        os.replace(final_tmp_path, final_checkpoint_path)
+                
+                        print(
+                            f"\n[FINAL CHECKPOINT] Saved successfully:\n"
+                            f"{final_checkpoint_path}\n"
+                            f"step={step}\n"
+                            f"current_example={checkpoint['current_example']}\n"
+                        )
+                
+                    self._barrier()
+                    
                 step += 1
             
             if self.is_main_process:
