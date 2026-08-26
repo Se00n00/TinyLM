@@ -536,44 +536,16 @@ class SFTTrainer(Trainer):
 
                     for micro_step in range(GRAD_ACCUM_STEPS):
                         global_micro_step = step * GRAD_ACCUM_STEPS + micro_step
-
+    
                         batch = next(Batches, None)
-
-                        # Check Availability of Data THoughout Ranks
+    
                         local_out_of_data = batch is None
                         all_out_of_data = self._all_ranks_out_of_data(local_out_of_data)
-
+    
                         if all_out_of_data:
                             EPOCH_COMPLETED = True
                             break
-                        if local_out_of_data:
-                            # Still must join this micro-step's collectives (bad-loss
-                            # all-reduce + backward()'s gradient all-reduce) even with no
-                            # batch, or our collective call-count diverges from ranks that
-                            # still have data and NCCL hangs until the watchdog fires.
-                            any_bad_loss = self._any_rank_bad_loss(False)
-                            if any_bad_loss:
-                                self.optimizer.zero_grad(set_to_none=True)
-                                step_completed = False
-                                break
-                        
-                            is_last_micro_step = (
-                                valid_micro_steps == GRAD_ACCUM_STEPS - 1
-                                or micro_step == GRAD_ACCUM_STEPS - 1
-                            )
-                            sync_context = (
-                                self.model.no_sync()
-                                if self.is_ddp and not is_last_micro_step
-                                else _nullcontext()
-                            )
-                            zero_loss = sum(
-                                (p.sum() for p in self.model.parameters()),
-                                start=torch.zeros((), device=self.device),
-                            ) * 0.0
-                            with sync_context:
-                                zero_loss.backward()
-                            continue
-
+    
                         is_last_micro_step = (
                             valid_micro_steps == GRAD_ACCUM_STEPS - 1
                             or micro_step == GRAD_ACCUM_STEPS - 1
@@ -583,123 +555,119 @@ class SFTTrainer(Trainer):
                             if self.is_ddp and not is_last_micro_step
                             else _nullcontext()
                         )
-
-                        with autocast(
-                            device_type=self.device.type, dtype=self.config.ptdtype
-                        ):
-                            batch_x = batch["data"].to(self.device, non_blocking=True)
-                            batch_y = batch["labels"].to(self.device, non_blocking=True)
-
-                            valid_tokens = (batch_y != self.config.label_idx).sum()
-
-                            # print("valid target tokens:", valid_tokens.item())
-                            # print("labels shape:", batch_y.shape)
-
-                            logits = self.model(batch_x)
-                            raw_loss = F.cross_entropy(
-                                logits.view(-1, logits.size(-1)),
-                                batch_y.view(-1),
-                                ignore_index=self.config.label_idx,
-                            )
-                            batch_entropy, batch_accuracy = (
-                                self.get_entropy_and_mean_token_accuracy(
-                                    logits, batch_y, self.config.label_idx
+    
+                        # ---------------------------------------------------
+                        # Every rank must call EXACTLY the same sequence of
+                        # collectives this micro-step regardless of which of
+                        # the three cases below it hits (out-of-data locally,
+                        # empty/all-masked batch, or a normal batch) - or the
+                        # ranks permanently desync their NCCL call count and
+                        # hang 30 min later on some future collective. So we
+                        # decide `local_bad_loss` uniformly first, always
+                        # call `_any_rank_bad_loss` exactly once, and then
+                        # always call exactly one backward() (real loss or
+                        # zero dummy loss) under the same sync_context.
+                        # ---------------------------------------------------
+                        if local_out_of_data:
+                            local_bad_loss = False
+                            is_empty_batch = True
+                        else:
+                            with autocast(
+                                device_type=self.device.type, dtype=self.config.ptdtype
+                            ):
+                                batch_x = batch["data"].to(self.device, non_blocking=True)
+                                batch_y = batch["labels"].to(self.device, non_blocking=True)
+    
+                                valid_tokens = (batch_y != self.config.label_idx).sum()
+    
+                                logits = self.model(batch_x)
+                                raw_loss = F.cross_entropy(
+                                    logits.view(-1, logits.size(-1)),
+                                    batch_y.view(-1),
+                                    ignore_index=self.config.label_idx,
                                 )
+                                batch_entropy, batch_accuracy = (
+                                    self.get_entropy_and_mean_token_accuracy(
+                                        logits, batch_y, self.config.label_idx
+                                    )
+                                )
+    
+                            is_empty_batch = valid_tokens.item() == 0
+                            local_bad_loss = (
+                                False if is_empty_batch else not torch.isfinite(raw_loss)
                             )
-
-                            if valid_tokens.item() == 0:
-                                # still participate in the collective so ranks stay in lockstep,
-                                # just contribute zero gradient
-                                zero_loss = (logits.sum() * 0.0) / GRAD_ACCUM_STEPS
-                                with sync_context:
-                                    zero_loss.backward()
-                                consumed += 1
-                                continue
-
-                            # print("loss:", raw_loss)
-                            # print("requires_grad:", raw_loss.requires_grad)
-                            # print("grad_fn:", raw_loss.grad_fn)
-
-                        local_bad_loss = not torch.isfinite(raw_loss)
+    
                         any_bad_loss = self._any_rank_bad_loss(local_bad_loss)
-                        
+    
                         if any_bad_loss:
                             if local_bad_loss and self.is_main_process:
                                 print("Non-finite loss encountered.")
                             self.optimizer.zero_grad(set_to_none=True)
                             step_completed = False
                             break
-
+    
+                        if local_out_of_data:
+                            zero_loss = sum(
+                                (p.sum() for p in self.model.parameters()),
+                                start=torch.zeros((), device=self.device),
+                            ) * 0.0
+                            with sync_context:
+                                zero_loss.backward()
+                            continue
+    
+                        if is_empty_batch:
+                            zero_loss = (logits.sum() * 0.0) / GRAD_ACCUM_STEPS
+                            with sync_context:
+                                zero_loss.backward()
+                            consumed += 1
+                            continue
+    
                         valid_micro_steps += 1
                         loss_accum += raw_loss.item()
                         entropy_accum += batch_entropy
                         accuracy_accum += batch_accuracy
-
+    
                         loss = raw_loss / GRAD_ACCUM_STEPS
-
-                        # DDP all-reduces gradients across ranks every time
-                        # `.backward()` is called. During grad-accumulation
-                        # we only actually want that sync on the *final*
-                        # micro-step of the accumulation window - doing it
-                        # on every micro-step wastes a lot of network
-                        # bandwidth for no benefit. `model.no_sync()`
-                        # disables the automatic all-reduce for all but
-                        is_last_micro_step = (
-                            valid_micro_steps == GRAD_ACCUM_STEPS
-                            or micro_step == GRAD_ACCUM_STEPS - 1
-                        )
-
-                        sync_context = (
-                            self.model.no_sync()
-                            if self.is_ddp and not is_last_micro_step
-                            else _nullcontext()
-                        )  # the last micro-step.
-
-                        # is_last_micro_step = micro_step == GRAD_ACCUM_STEPS - 1
-
+    
                         with sync_context:
                             if self.config.ptdtype == torch.float16:
                                 self.scaler.scale(loss).backward()
                             else:
                                 loss.backward()
-
+    
                         consumed += 1
-
+    
                     if valid_micro_steps == 0:
                         self.optimizer.zero_grad(set_to_none=True)
                         step_completed = False
                         if EPOCH_COMPLETED:
                             break
                         continue
-
+    
                     loss_accum /= GRAD_ACCUM_STEPS
                     entropy = entropy_accum / GRAD_ACCUM_STEPS
                     mean_token_accuracy = accuracy_accum / GRAD_ACCUM_STEPS
-
+    
                     if self.config.ptdtype == torch.float16:
                         self.scaler.unscale_(self.optimizer)
-
-                    # Computed on local (post-all-reduce) gradients, which
-                    # are already identical across ranks by this point, so
-                    # this grad_norm is already the "global" norm - no
-                    # further reduction needed here.
+    
                     grad_norm = torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(),
                         1.0,
                     )
-
+    
                     if self.config.ptdtype == torch.float16:
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                     else:
                         self.optimizer.step()
-
+    
                     step_completed = True
-
+    
                 if self.is_main_process:
                     train_bar.n = min(self.current_example, total_iterations)
                     train_bar.refresh()
-
+    
                 elapsed = time.time() - t_start
                 
                 sync_example = self._broadcast_int(self.current_example, src=0)
