@@ -130,8 +130,14 @@ TinyLM's Trainer module
                 }
 """
 
-from .sfttrainer import SFTConfig, SFTTrainer
-from .util import preprocess_rft, preprocess_text_generation,process_tc, process_ift_dataset
+from .sfttrainer.sftconfig import SFTConfig
+from .sfttrainer.sfttrainer import SFTTrainer
+from .util import (
+    preprocess_rft,
+    preprocess_text_generation,
+    process_ift_dataset,
+    process_tc,
+)
 
 __all__ = [
     "SFTConfig",
