@@ -547,6 +547,31 @@ class SFTTrainer(Trainer):
                             EPOCH_COMPLETED = True
                             break
                         if local_out_of_data:
+                            # Still must join this micro-step's collectives (bad-loss
+                            # all-reduce + backward()'s gradient all-reduce) even with no
+                            # batch, or our collective call-count diverges from ranks that
+                            # still have data and NCCL hangs until the watchdog fires.
+                            any_bad_loss = self._any_rank_bad_loss(False)
+                            if any_bad_loss:
+                                self.optimizer.zero_grad(set_to_none=True)
+                                step_completed = False
+                                break
+                        
+                            is_last_micro_step = (
+                                valid_micro_steps == GRAD_ACCUM_STEPS - 1
+                                or micro_step == GRAD_ACCUM_STEPS - 1
+                            )
+                            sync_context = (
+                                self.model.no_sync()
+                                if self.is_ddp and not is_last_micro_step
+                                else _nullcontext()
+                            )
+                            zero_loss = sum(
+                                (p.sum() for p in self.model.parameters()),
+                                start=torch.zeros((), device=self.device),
+                            ) * 0.0
+                            with sync_context:
+                                zero_loss.backward()
                             continue
 
                         is_last_micro_step = (
