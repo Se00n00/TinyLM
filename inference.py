@@ -9,16 +9,11 @@ import time
 # from models import GPT2LMHeadModel, AdvancedLMHeadModel
 
 SYSTEM_PROMPT = """
-You are a helpful, conversational AI companion. Keep your tone natural, engaging, and slightly witty. 
-
-* **Be Concise:** Answer directly and avoid unnecessary fluff or repetitive pleasantries.
-* **Adapt:** Match the user's energy, style, and technical level. 
-* **Structure:** Use clean markdown (bolding, lists) to make responses easy to scan.
-* **Stay Grounded:** Never make up facts. If you don't know something, just say so.
+You are a helpful, conversational AI companion and always provide user with answer
 """
 
 @torch.no_grad()
-async def generate(model, tokenizer, user_prompt, max_new_tokens, system_prompt:str|None=None, temperature=1.0, top_k=50, top_p=0.9, max_seq_len:int|None=40000, device="cpu"):
+async def generate(model, tokenizer, user_prompt, max_new_tokens, max_thinking = 150, system_prompt:str|None=None, temperature=1.0, top_k=50, top_p=0.9, max_seq_len:int|None=40000, device="cpu"):
     """
     Generates text from a prompt using KV caching and sampling.
     """
@@ -32,6 +27,8 @@ async def generate(model, tokenizer, user_prompt, max_new_tokens, system_prompt:
     input_ids = tokenizer.encode("<|START|>"+prompt)
     eos_id = tokenizer.encode(tokenizer.eos_token)[0]
     bos_id = tokenizer.encode(tokenizer.bos_token)[0]
+    thinking_start = tokenizer.encode("<|THINK|>")[0]
+    thinking_end = tokenizer.encode("<|/THINK|>")[0]
     
     if input_ids[-1] == eos_id:
         input_ids.pop()
@@ -147,7 +144,7 @@ def main():
         default="PT",
         help="Pipeline process: pt, it,..",
     )
-    parser.add_argument("--max_new_tokens", type=int, default=100, help="Maximum number of tokens to generate")
+    parser.add_argument("--max_new_tokens", type=int, default=4096, help="Maximum number of tokens to generate")
     parser.add_argument("--temperature", type=float, default=0.8, help="Temperature (0.0 for greedy)")
     parser.add_argument("--top_k", type=int, default=40, help="Top-k filtering (0 to disable)")
     parser.add_argument("--top_p", type=float, default=0.9, help="Top-p/nucleus sampling (1.0 to disable)")
@@ -201,7 +198,7 @@ def main():
             temperature=args.temperature,
             top_k=args.top_k,
             top_p=args.top_p,
-            max_seq_len= 512,
+            max_seq_len= 4096,
             device=device
         ):
             print(token,  end="", flush=True)

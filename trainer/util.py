@@ -116,6 +116,17 @@ def preprocess_rtc(example):
         ],
     }
 
+def process_iftc(example):
+    from_replc = {'system':'system', 'human': 'user', 'gpt':'assistant'}
+    return {
+        "messages": [
+            {"role":from_replc.get(msg['from'], 'assistant'), "content": msg.get("value", '')}
+            for msg in example['conversations']
+        ]
+    }
+    
+
+    
 import json
 
 

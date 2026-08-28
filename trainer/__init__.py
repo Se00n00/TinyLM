@@ -136,6 +136,7 @@ from .util import (
     preprocess_rft,
     preprocess_text_generation,
     process_ift_dataset,
+    process_iftc,
     process_tc,
 )
 
@@ -146,4 +147,5 @@ __all__ = [
     "preprocess_rft",
     "process_tc",
     "preprocess_text_generation",
+    "process_iftc",
 ]
