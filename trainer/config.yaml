@@ -83,7 +83,7 @@ dataset:
       split: train
       limit:  NULL
       max_seq_len: 2048
-      batch_size: 4
+      batch_size: 3
       grad_accum_steps: 16
       learning_rate: 1e-4
       
@@ -93,7 +93,7 @@ dataset:
       split: train
       limit:  NULL
       max_seq_len: 2048
-      batch_size: 4
+      batch_size: 3
       grad_accum_steps: 16
       learning_rate: 1e-4
   
