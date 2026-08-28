@@ -546,10 +546,7 @@ class SFTTrainer(Trainer):
                             EPOCH_COMPLETED = True
                             break
     
-                        is_last_micro_step = (
-                            valid_micro_steps == GRAD_ACCUM_STEPS - 1
-                            or micro_step == GRAD_ACCUM_STEPS - 1
-                        )
+                        is_last_micro_step = (micro_step == GRAD_ACCUM_STEPS - 1)
                         sync_context = (
                             self.model.no_sync()
                             if self.is_ddp and not is_last_micro_step
