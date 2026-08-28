@@ -1,6 +1,8 @@
 pipeline:
   - PT
   - IFT
+  - IFTC_2
+  - IFTC_1
   - RFT
   - TC
     
@@ -74,6 +76,27 @@ dataset:
       split: train_sft
       limit:  NULL
       learning_rate: 1e-4
+  
+  IFTC_2:
+    - base: "stindardlogic/system-prompt-sft-50k"
+      subset: NULL
+      split: train
+      limit:  NULL
+      max_seq_len: 2048
+      batch_size: 4
+      grad_accum_steps: 16
+      learning_rate: 1e-4
+      
+  IFTC_1:
+    - base: "teknium/OpenHermes-2.5"
+      subset: NULL
+      split: train
+      limit:  NULL
+      max_seq_len: 2048
+      batch_size: 4
+      grad_accum_steps: 16
+      learning_rate: 1e-4
+  
     
   RFT:
     - base: "Scale-or-Reason/general-reasoning-ift-pairs"

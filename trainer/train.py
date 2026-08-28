@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 
 from Model.layers import Config
 from Model.models import Model
-from trainer import SFTConfig, SFTTrainer, preprocess_rft, process_tc, process_ift_dataset, preprocess_text_generation
+from trainer import SFTConfig, SFTTrainer, preprocess_rft, process_tc, process_ift_dataset, preprocess_text_generation, process_iftc
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -228,6 +228,11 @@ class Train:
             case "TC":
                 return dataset.map(process_tc, remove_columns=list(dataset.features.keys()))
             
+            case "IFTC_1":
+                return dataset.map(process_iftc, remove_columns=list(dataset.features.keys()))
+                
+            case "IFTC_2":
+                return dataset.map(process_iftc, remove_columns=list(dataset.features.keys()))
             # case "RTC":
             #     pass
             
