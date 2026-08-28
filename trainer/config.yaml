@@ -95,7 +95,7 @@ dataset:
       max_seq_len: 2048
       batch_size: 3
       grad_accum_steps: 16
-      learning_rate: 1e-4
+      learning_rate: 8e-5
   
     
   RFT:
