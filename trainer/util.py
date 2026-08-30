@@ -186,10 +186,6 @@ def process_tc(example):
         "messages": processed
     }
     
-import json
-import ast
-
-
 def parse_content(content):
     if not isinstance(content, str):
         return content
@@ -198,9 +194,10 @@ def parse_content(content):
         return json.loads(content)
     except json.JSONDecodeError:
         try:
+            import ast
             return ast.literal_eval(content)
         except (ValueError, SyntaxError):
-            raise ValueError(f"Cannot parse content: {content[:500]}")
+            return None
 
 
 def process_warmup(example):
@@ -213,23 +210,37 @@ def process_warmup(example):
         "available_tools": "available_tools",
     }
 
-    new_messages = []
+    tools = next(
+        (
+            msg.get("content")
+            for msg in example["messages"]
+            if msg.get("role") == "available_tools"
+        ),
+        None,
+    )
 
-    for msg in example["messages"]:
-        role = change[msg["role"]]
-        content = msg["content"]
+    available_tools = parse_content(tools)
 
-        if role == "available_tools":
-            content = parse_content(content)
-            content = json.dumps(
-                content,
-                ensure_ascii=False,
-                separators=(",", ":"),
-            )
+    if tools is not None and available_tools is None:
+        return {"valid": False}
+        
+    available_tools = json.dumps(
+        available_tools,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
-        new_messages.append({
-            "role": role,
-            "content": content,
-        })
-
-    return {"messages": new_messages}
+    return {
+        "messages": [
+            {
+                "role": change[msg["role"]],
+                "content": (
+                    available_tools
+                    if msg["role"] == "available_tools"
+                    else msg["content"]
+                ),
+            }
+            for msg in example["messages"]
+        ],
+        "valid": True,
+    }
