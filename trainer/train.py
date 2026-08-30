@@ -234,7 +234,11 @@ class Train:
             case "IFTC_2":
                 return dataset.map(process_iftc, remove_columns=list(dataset.features.keys()))
             case "WARMUP":
-                return dataset.map(process_warmup, remove_columns=list(dataset.features.keys()))
+                dataset = dataset.map(process_warmup, remove_columns=list(dataset.features.keys()))
+                dataset = dataset.filter(lambda x: x["valid"])
+                dataset = dataset.remove_columns("valid")
+                
+                return dataset
             
             
             case "PT":
