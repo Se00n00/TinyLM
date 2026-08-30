@@ -138,6 +138,7 @@ from .util import (
     process_ift_dataset,
     process_iftc,
     process_tc,
+    process_warmup,
 )
 
 __all__ = [
@@ -146,6 +147,7 @@ __all__ = [
     "process_ift_dataset",
     "preprocess_rft",
     "process_tc",
+    "process_warmup",
     "preprocess_text_generation",
     "process_iftc",
 ]

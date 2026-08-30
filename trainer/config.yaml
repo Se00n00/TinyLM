@@ -3,6 +3,7 @@ pipeline:
   - IFT
   - IFTC_2
   - IFTC_1
+  - WARMUP
   - RFT
   - TC
     
@@ -97,6 +98,15 @@ dataset:
       grad_accum_steps: 16
       learning_rate: 8e-5
   
+  WARMUP:
+    - base: "Se00n00/Warm-Up"
+      subset: NULL
+      split: train
+      limit:  NULL
+      max_seq_len: 2048
+      batch_size: 2
+      grad_accum_steps: 16
+      learning_rate: 8e-5
     
   RFT:
     - base: "Scale-or-Reason/general-reasoning-ift-pairs"

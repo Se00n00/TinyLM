@@ -135,14 +135,14 @@ def process_tc(example):
     functions = json.loads(example["functions"])
 
     processed = []
-    # {
-    #     "role": "available_tools",
-    #     "content": json.dumps(
-    #         functions,
-    #         ensure_ascii=False,
-    #         separators=(",", ":"),
-    #     ),
-    # }
+    {
+        "role": "available_tools",
+        "content": json.dumps(
+            functions,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+    }
 
     for msg in messages:
         role = msg["role"]
@@ -185,3 +185,51 @@ def process_tc(example):
     return {
         "messages": processed
     }
+    
+import json
+import ast
+
+
+def parse_content(content):
+    if not isinstance(content, str):
+        return content
+
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        try:
+            return ast.literal_eval(content)
+        except (ValueError, SyntaxError):
+            raise ValueError(f"Cannot parse content: {content[:500]}")
+
+
+def process_warmup(example):
+    change = {
+        "tool_results": "tool",
+        "tool": "tool",
+        "user": "user",
+        "assistant": "assistant",
+        "system": "system",
+        "available_tools": "available_tools",
+    }
+
+    new_messages = []
+
+    for msg in example["messages"]:
+        role = change[msg["role"]]
+        content = msg["content"]
+
+        if role == "available_tools":
+            content = parse_content(content)
+            content = json.dumps(
+                content,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+
+        new_messages.append({
+            "role": role,
+            "content": content,
+        })
+
+    return {"messages": new_messages}

@@ -14,9 +14,6 @@ You are a helpful, conversational AI companion and always provide user with answ
 
 @torch.no_grad()
 async def generate(model, tokenizer, user_prompt, max_new_tokens, max_thinking = 150, system_prompt:str|None=None, temperature=1.0, top_k=50, top_p=0.9, max_seq_len:int|None=40000, device="cpu"):
-    """
-    Generates text from a prompt using KV caching and sampling.
-    """
     
     if system_prompt:
         prompt = "<|SYSTEM|>"+system_prompt + "<|USER|>"+ user_prompt + "<|ASSISTANT|>"
