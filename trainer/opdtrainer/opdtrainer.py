@@ -26,7 +26,7 @@ from trainer.sfttrainer.sftconfig import SFTConfig
 from trainer.util import get_lr
 
 
-class SFTTrainer(Trainer):
+class OPDTrainer(Trainer):
     def __init__(
         self,
         training_name,
@@ -34,6 +34,7 @@ class SFTTrainer(Trainer):
         pipeline,
         dataset_name,
         model,
+        teacher_model,
         tokenizer,
         ds: Dataset | HFIterableDataset,
         config: SFTConfig,
@@ -223,11 +224,11 @@ class SFTTrainer(Trainer):
         """
         if not self.is_ddp:
             return local_bad
-
+    
         t = torch.tensor(1.0 if local_bad else 0.0, device=self.device)
         dist.all_reduce(t, op=dist.ReduceOp.MAX)
         return t.item() == 1.0
-
+    
     def _any_rank_oom(self, local_oom: bool) -> bool:
         """
         All-reduces a per-rank 'this rank just OOM'd' flag (MAX) so every
@@ -238,11 +239,11 @@ class SFTTrainer(Trainer):
         """
         if not self.is_ddp:
             return local_oom
-
+    
         t = torch.tensor(1.0 if local_oom else 0.0, device=self.device)
         dist.all_reduce(t, op=dist.ReduceOp.MAX)
         return t.item() == 1.0
-
+    
     def _broadcast_int(self, value: int, src: int = 0) -> int:
         """Broadcasts an int from `src` so every rank branches on an
         identical value instead of its own possibly-drifted local counter."""
@@ -251,7 +252,7 @@ class SFTTrainer(Trainer):
         t = torch.tensor(int(value), dtype=torch.int64, device=self.device)
         dist.broadcast(t, src=src)
         return int(t.item())
-
+        
     def _barrier(self):
         if self.is_ddp:
             dist.barrier()
@@ -307,24 +308,29 @@ class SFTTrainer(Trainer):
 
         trainer = SFTTrainer(**trainer_kwargs)
         trainer.train()
-
+        
         del trainer
         import gc
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
-
+    
         # Run multiprocessing's own atexit cleanup explicitly - this is what
         # unlinks the semaphores mp.spawn's process-sync primitives created.
         # os._exit() below skips atexit entirely, which is what caused the
         # "leaked semaphore objects" warning once we started using it.
         import multiprocessing.util
         multiprocessing.util._exit_function()
-
+        
         os._exit(0)
 
-    
+    def init_csv(self, csv_path, cols):
+        if not Path(csv_path).exists():
+            Path(csv_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(cols)
 
     def train(self):
         super().train()
@@ -419,7 +425,7 @@ class SFTTrainer(Trainer):
                 "-------------------------------------------------------------------------\n"
             )
         self._barrier()
-
+        
         train_bar = tqdm(
             total=total_iterations,
             desc="Training",
@@ -441,7 +447,7 @@ class SFTTrainer(Trainer):
                 "max_seq_len": self.config.max_length,
                 "learning_rate": self.config.learning_rate,
             }
-
+            
             # ---------------------------------------------
             # TRAIN LOOP
             # ---------------------------------------------
@@ -494,23 +500,26 @@ class SFTTrainer(Trainer):
 
                     for micro_step in range(GRAD_ACCUM_STEPS):
                         global_micro_step = step * GRAD_ACCUM_STEPS + micro_step
-
+    
                         batch = next(Batches, None)
-
+    
                         local_out_of_data = batch is None
                         all_out_of_data = self._all_ranks_out_of_data(local_out_of_data)
-
+    
                         if all_out_of_data:
                             EPOCH_COMPLETED = True
                             break
-
-                        is_last_micro_step = (micro_step == GRAD_ACCUM_STEPS - 1)
+    
+                        is_last_micro_step = (
+                            valid_micro_steps == GRAD_ACCUM_STEPS - 1
+                            or micro_step == GRAD_ACCUM_STEPS - 1
+                        )
                         sync_context = (
                             self.model.no_sync()
                             if self.is_ddp and not is_last_micro_step
                             else _nullcontext()
                         )
-
+    
                         # ---------------------------------------------------
                         # Every rank must call EXACTLY the same sequence of
                         # collectives this micro-step regardless of which of
@@ -532,35 +541,43 @@ class SFTTrainer(Trainer):
                             ):
                                 batch_x = batch["data"].to(self.device, non_blocking=True)
                                 batch_y = batch["labels"].to(self.device, non_blocking=True)
-
+    
                                 valid_tokens = (batch_y != self.config.label_idx).sum()
-
-                                logits = self.model(batch_x)
-                                raw_loss = F.cross_entropy(
-                                    logits.view(-1, logits.size(-1)),
-                                    batch_y.view(-1),
-                                    ignore_index=self.config.label_idx,
-                                )
+                                
+                                with torch.no_grad():
+                                    student_tokens = self.model.generate(batch_x) # TODO: Write Model.generate
+                                
+                                with torch.no_grad():
+                                    teacher_logits = self.teacher_model(student_tokens) # TODO: Initiallize Teacher Model
+                                    
+    
+                                student_logits = self.model(student_tokens)
+                                
+                                student_prob_dist = F.log_softmax(student_logits, dim=-1)
+                                teacher_prob_dist = F.log_softmax(teacher_logits, dim=-1)
+                                
+                                raw_loss = F.kl_div(student_prob_dist, teacher_prob_dist, reduction='batchmean',log_target=True)
+                                
                                 batch_entropy, batch_accuracy = (
                                     self.get_entropy_and_mean_token_accuracy(
-                                        logits, batch_y, self.config.label_idx
+                                        student_logits, batch_y, self.config.label_idx
                                     )
                                 )
-
+    
                             is_empty_batch = valid_tokens.item() == 0
                             local_bad_loss = (
                                 False if is_empty_batch else not torch.isfinite(raw_loss)
                             )
-
+    
                         any_bad_loss = self._any_rank_bad_loss(local_bad_loss)
-
+    
                         if any_bad_loss:
                             if local_bad_loss and self.is_main_process:
                                 print("Non-finite loss encountered.")
                             self.optimizer.zero_grad(set_to_none=True)
                             step_completed = False
                             break
-
+    
                         if local_out_of_data:
                             zero_loss = sum(
                                 (p.sum() for p in self.model.parameters()),
@@ -569,62 +586,62 @@ class SFTTrainer(Trainer):
                             with sync_context:
                                 zero_loss.backward()
                             continue
-
+    
                         if is_empty_batch:
                             zero_loss = (logits.sum() * 0.0) / GRAD_ACCUM_STEPS
                             with sync_context:
                                 zero_loss.backward()
                             consumed += 1
                             continue
-
+    
                         valid_micro_steps += 1
                         loss_accum += raw_loss.item()
                         entropy_accum += batch_entropy
                         accuracy_accum += batch_accuracy
-
+    
                         loss = raw_loss / GRAD_ACCUM_STEPS
-
+    
                         with sync_context:
                             if self.config.ptdtype == torch.float16:
                                 self.scaler.scale(loss).backward()
                             else:
                                 loss.backward()
-
+    
                         consumed += 1
-
+    
                     if valid_micro_steps == 0:
                         self.optimizer.zero_grad(set_to_none=True)
                         step_completed = False
                         if EPOCH_COMPLETED:
                             break
                         continue
-
+    
                     loss_accum /= GRAD_ACCUM_STEPS
                     entropy = entropy_accum / GRAD_ACCUM_STEPS
                     mean_token_accuracy = accuracy_accum / GRAD_ACCUM_STEPS
-
+    
                     if self.config.ptdtype == torch.float16:
                         self.scaler.unscale_(self.optimizer)
-
+    
                     grad_norm = torch.nn.utils.clip_grad_norm_(
                         self.model.parameters(),
                         1.0,
                     )
-
+    
                     if self.config.ptdtype == torch.float16:
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                     else:
                         self.optimizer.step()
-
+    
                     step_completed = True
-
+    
                 if self.is_main_process:
                     train_bar.n = min(self.current_example, total_iterations)
                     train_bar.refresh()
-
+    
                 elapsed = time.time() - t_start
-
+                
                 sync_example = self._broadcast_int(self.current_example, src=0)
 
                 if self.is_main_process:
@@ -782,7 +799,7 @@ class SFTTrainer(Trainer):
                     EPOCH_COMPLETED == True
                 ):
                     prev_log_example = sync_example
-
+                    
                     global_current_example_log = self._reduce_sum(self.current_example)
 
                     if self.is_main_process:
@@ -834,7 +851,7 @@ class SFTTrainer(Trainer):
                         config_data["pipeline"][self.pipeline][target_idx][
                             "completed"
                         ] = bool(EPOCH_COMPLETED)
-
+                        
                         # print(f"\n\nCURRENT EXAMPLE: {config_data['global_current_example']} | INCREMENT: {(self.config.logging_steps * self.world_size) if sync_example > 0 else 0} | REAL GLOBAL EXAMPLE: {global_current_example_log} | EXPECTED {sync_example * self.world_size}\n\n")
                         config_data['global_current_example'] += (self.config.logging_steps * self.world_size) if sync_example > 0 else 0
                         config_data['current_pipeline'] = self.pipeline
@@ -850,24 +867,24 @@ class SFTTrainer(Trainer):
                                 sort_keys=False,
                                 default_flow_style=False,
                             )
-
+                    
                     # print(f"VALIDATION --> SAVING --> CONFIG & NORMAL SAVE: {self.local_rank}")
                     self._barrier()
-
+                
                 # -------------------------------------------------------
                 # FINAL CHECKPOINT — ALWAYS SAVE WHEN EPOCH COMPLETES
                 # -------------------------------------------------------
                 if EPOCH_COMPLETED:
                     self._barrier()
-
+                
                     if self.is_main_process:
                         final_checkpoint_path = os.path.join(
                             self.config.checkpoint_dir,
                             f"{self.training_name}/{self.pipeline}/model.pt",
                         )
-
+                
                         final_tmp_path = final_checkpoint_path + ".tmp"
-
+                
                         checkpoint = {
                             "step": step,
                             "val_loss": self.best_val_loss,
@@ -878,27 +895,27 @@ class SFTTrainer(Trainer):
                             "optimizer_state_dict": self.optimizer.state_dict(),
                             "run_meta": run_meta,
                         }
-
+                
                         # Write temporary file first
                         torch.save(checkpoint, final_tmp_path)
-
+                
                         # Atomic replacement
                         os.replace(final_tmp_path, final_checkpoint_path)
-
+                
                         print(
                             f"\n[FINAL CHECKPOINT] Saved successfully:\n"
                             f"{final_checkpoint_path}\n"
                             f"step={step}\n"
                             f"current_example={checkpoint['current_example']}\n"
                         )
-
+                
                     self._barrier()
-
+                    
                 step += 1
-
+            
             if self.is_main_process:
                 train_bar.close()
-
+        
             # print(f"TIMES INCREMENTED: {incremented} | INCREMENT AMOUNT: {self.config.logging_steps * self.world_size}")
         except RuntimeError as e:
             tqdm.write(str(e))
@@ -908,20 +925,20 @@ class SFTTrainer(Trainer):
                 or "memory limit" in err_msg
                 or "allowed memory" in err_msg
             )
-
+        
             # Every rank must agree whether this was recoverable OOM,
             # otherwise one rank could shrink+retry while others fall
             # through to cleanup and hang the survivors on the next
             # collective call.
             any_oom = self._any_rank_oom(local_is_oom)
-
+        
             if not any_oom:
                 # Non-OOM error on at least one rank: everyone raises
                 # together rather than leaving healthy ranks stuck in a
                 # collective the failing rank never rejoins.
                 train_bar.close()
                 raise e
-
+        
             if self.is_main_process:
                 print(
                     f"\n[Memory Guard] CUDA OOM or limit exceeded at step {step} "
@@ -930,7 +947,7 @@ class SFTTrainer(Trainer):
             self.optimizer.zero_grad(set_to_none=True)
             torch.cuda.empty_cache()
             self._barrier()  # let every rank finish cleanup before retrying
-
+        
             if BATCH_SIZE > 1:
                 old_bs = BATCH_SIZE
                 BATCH_SIZE = max(1, BATCH_SIZE // 2)
@@ -957,7 +974,7 @@ class SFTTrainer(Trainer):
                     )
                 train_bar.close()
                 raise e
-
+        
             # Re-enter the training loop with the adjusted settings instead
             # of falling through — this is the part the original code never
             # did, so "recovery" never actually resumed training.
@@ -1031,16 +1048,7 @@ class SFTTrainer(Trainer):
                         None,
                     )
                     if tools:
-                        if isinstance(tools, str):
-                            try:
-                                tools = json.loads(tools)
-                            except json.JSONDecodeError:
-                                try:
-                                    import ast
-                                    tools = ast.literal_eval(tools)
-                                except (ValueError, SyntaxError):
-                                    # Invalid tool definition → skip example
-                                    return None, None
+                        tools = json.loads(tools)
 
                     chat_messages = [
                         msg for msg in messages if msg.get("role") != "available_tools"
@@ -1142,9 +1150,6 @@ class SFTTrainer(Trainer):
 
             for example in DATASET:
                 tokens, assistant_mask = encode_example(example)
-                
-                if tokens is None or assistant_mask is None:
-                    continue
 
                 token_buffer.extend(tokens)
                 mask_buffer.extend(assistant_mask)

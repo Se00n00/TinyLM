@@ -579,13 +579,26 @@ class GRPOTrainer(Trainer):
                                 batch_y = batch["labels"].to(self.device, non_blocking=True)
     
                                 valid_tokens = (batch_y != self.config.label_idx).sum()
-    
-                                logits = self.model(batch_x)
-                                raw_loss = F.cross_entropy(
-                                    logits.view(-1, logits.size(-1)),
-                                    batch_y.view(-1),
-                                    ignore_index=self.config.label_idx,
-                                )
+                                
+                                # TODO: DO All
+                                responses = self.model.generate(batch_x, num_generation = 6)
+                                rewards = self.verifier(batch_x, responses)
+                                advantages = group_normalize(rewards)
+                                
+                                # 4. Compute policy log-probs
+                                logp = policy.log_probs(prompts, responses)
+                            
+                                # 5. Compare with old policy
+                                ratio = exp(logp - old_logp)
+                            
+                                # 6. GRPO clipped objective
+                                loss = self.grpo_loss(ratio, advantages)
+                            
+                                # 7. Optional KL against frozen reference
+                                if use_kl:
+                                    ref_logp = reference.log_probs(prompts, responses)
+                                    loss += beta * KL(logp, ref_logp)
+
                                 batch_entropy, batch_accuracy = (
                                     self.get_entropy_and_mean_token_accuracy(
                                         logits, batch_y, self.config.label_idx

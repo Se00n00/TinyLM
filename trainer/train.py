@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 
 from Model.layers import Config
 from Model.models import Model
-from trainer import SFTConfig, SFTTrainer, preprocess_rft, process_tc, process_ift_dataset, preprocess_text_generation, process_iftc
+from trainer import SFTConfig, SFTTrainer, preprocess_rft, process_tc, process_ift_dataset, preprocess_text_generation, process_iftc, process_warmup
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -150,7 +150,7 @@ class Train:
                 
         
                 if row_offset > 0:
-                    ds = ds.skip(row_offset)
+                    ds = ds.skip(int(row_offset))
         
                 if dataset.get("limit", None):
                     ds = ds.take(dataset.get("limit"))
@@ -233,8 +233,9 @@ class Train:
                 
             case "IFTC_2":
                 return dataset.map(process_iftc, remove_columns=list(dataset.features.keys()))
-            # case "RTC":
-            #     pass
+            case "WARMUP":
+                return dataset.map(process_warmup, remove_columns=list(dataset.features.keys()))
+            
             
             case "PT":
                 return dataset.map(preprocess_text_generation, remove_columns=list(dataset.features.keys()), fn_kwargs={"text_column":dataset_config["text_column"]}) 
