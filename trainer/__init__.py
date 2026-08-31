@@ -135,6 +135,7 @@ from .sfttrainer.sfttrainer import SFTTrainer
 from .util import (
     preprocess_rft,
     preprocess_text_generation,
+    process_cot,
     process_ift_dataset,
     process_iftc,
     process_tc,
@@ -150,4 +151,5 @@ __all__ = [
     "process_warmup",
     "preprocess_text_generation",
     "process_iftc",
+    "process_cot"
 ]

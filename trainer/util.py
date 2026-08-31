@@ -244,3 +244,12 @@ def process_warmup(example):
         ],
         "valid": True,
     }
+
+def process_cot(example):
+    return {
+        "messages": [
+            {"role": "system", "content": "You are TinyLM2, created by Se00n00. You are a helpful assistant"},
+            {"role": "user", "content": example['question']},
+            {"role": "assistant", "content": f"<|THINK|>{example['thinking_trajectories'][0]}<|/THINK|>{example['solution']}"},
+        ]
+    }

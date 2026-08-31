@@ -38,15 +38,24 @@ def count_examples_until_tokens(dataset:str, subset:str|None = None, data_dir: s
 
             for example in ds:
                 text = example.get(text_column) or ""
-                if not isinstance(text, str) or not text.strip():
-                    continue
-
+                if isinstance(text, list) and len(text) > 0:
+                    # Check if the 'role' value is invalid
+                    if text[0].get('role') not in ['user', 'assistant', 'system']:
+                        print("\nWrong chat template !")
+                        print(f"Invalid role found: {text[0].get('role')}")
+                        break
+                       
+                # if not isinstance(text, str) or not text.strip():
+                #     print("text column name in Wrong !")
+                #     break
+                if isinstance(text, list):
+                    text = {"messages":text}
                 # Safer tokenization (avoids the long-sequence warning spam)
                 tokens = tokenizer.encode(
                     text,
                     add_special_tokens=False,
                     truncation=False,          # we want full length for counting
-                )
+                ) if isinstance(text, list) else tokenizer.apply_chat_template(text) 
                 total_tokens += len(tokens)
                 num_examples += 1
 
