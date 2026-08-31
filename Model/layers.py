@@ -109,6 +109,7 @@ class Attention(nn.Module):
         
         combined_mask = alibi.clone()
         combined_mask = combined_mask.to(x.device).masked_fill(~causal_mask.to(x.device), float("-inf"))
+        combined_mask = combined_mask.to(dtype=Q.dtype)
         # ---------------------------------------
 
         

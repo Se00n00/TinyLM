@@ -21,7 +21,6 @@ pth.py
 # Tests
 test_tokenizer.py
 
-
 to_run.txt
 Evaluation/results_GPT_IFT.json
 Evaluation/results_GPT_PFT_2.json
@@ -33,3 +32,7 @@ ev/
 
 # STRAY MODEL
 *.pt
+
+# MODEL
+TinyLM2PT
+TinyLM2IFT
