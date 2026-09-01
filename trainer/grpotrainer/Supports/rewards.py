@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import Dict, List
 
 """
 # REWARD FUNCTIONS
@@ -15,7 +15,7 @@ from typing import List, Dict
     ### Standard Format : prompt
 
         ["Hello! how are you ?", "What can you do for me?"]
-    
+
     ### Conversational Format: prompt
 
         [{
@@ -25,16 +25,16 @@ from typing import List, Dict
             "role":"user",
             "content": "What can you do for me?"
         }]
-    
+
     ### Completion_ids
-        
+
         [
-            [6303, 13], 
+            [6303, 13],
             [304, 279, 12884, 13]
         ]
 
     ### Rewards: Each completions get a reward !
-    
+
         [
             0,
             1
@@ -44,16 +44,23 @@ from typing import List, Dict
 
         Reward from reward function for Category # 1: [NONE, 1, 0, 1, NONE, NONE, 0]
         Reward from reward function for Category # 2: [0, NONE, NONE, NONE, 1, 1, NONE]
-    
-    ### Async reward functions: Tool calls / 
+
+    ### Multi-reward Functions are weighted
+
+        weights for Categories: [Category 1, Category 2]: [0.2, 1]
+
+    ### Async reward functions: Tool calls /
+
+    ### Final Advantage
+
+        Advantage: (Reward(i) - mean(Rewards)) / std(Rewards)
 """
 
+
 def reward_func(
-        prompts: List[str] | List[Dict],
-        completions: List[str] | List[Dict],
-        completion_ids: List[List]], # Tokenized Completions Ids
-        ) -> List[float]:
+    prompts: List[str] | List[Dict],
+    completions: List[str] | List[Dict],
+    completion_ids: List[List],  # Tokenized Completions Ids
+) -> List[float]:
+
     return [0.0]
-
-
-
