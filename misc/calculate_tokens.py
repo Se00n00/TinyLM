@@ -14,7 +14,7 @@ tokenizer = AutoTokenizer.from_pretrained("Se00n00/TinyLM-2")
 
 
 def count_examples_until_tokens(dataset:str, subset:str|None = None, data_dir: str|None = None, split:str ="train", text_column: str = "content", target_tokens:int|None = None, max_retries: int = 5):
-    print(f"\n=== Processing {data_dir} ===")
+    print(f"\n====================== Processing {data_dir} ======================")
 
     for attempt in range(1, max_retries + 1):
         try:
