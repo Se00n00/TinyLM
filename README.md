@@ -7,8 +7,11 @@
 **TinyLM-1-70M** is a compact decoder-only Transformer language model designed for efficient instruction following and conversational AI on edge devices, while also providing a lightweight platform for researching and understanding language-model behavior
 
 ---
-<img src="loss.png">
 <img src="perplexity.png">
+<div align="center">perplexity vs loss</div>
+<img src="loss.png">
+<div align="center">loss vs mean token accuracy</div>
+
 
 ---
 
