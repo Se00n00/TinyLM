@@ -18,21 +18,7 @@ from trainer import SFTConfig, SFTTrainer, preprocess_rft, process_tc, process_i
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-PRE_DATASET = {
-    "base": "HuggingFaceFW/fineweb-edu",
-    "subset": "sample-10BT",
-    "split": "train",
-}
-IFT_DATASET = {
-    "base": "HuggingFaceH4/ultrachat_200k",
-    "subset": None,
-    "split": "train_sft",
-}
-RFT_DATASET = {
-    "base": "Scale-or-Reason/general-reasoning-ift-pairs",
-    "subset": None,
-    "split": "reasoning_ift_pairs",
-}
+
 token = os.getenv("HF_TOKEN")
 if not token:
     print("\nWARNING ! Please Use Huggingface Token WhenEver Required !\n")
