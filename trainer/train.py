@@ -110,6 +110,7 @@ class Train:
                     else args.validation_dataset_limit / total_samples
                 )
                 training_samples = int(new_total_samples * (1 - test_train_ratio))
+                print(f"Training Samples: {training_samples} | Trained: { training_info['pipeline'][pipeline][idx]['trained']}")
 
                 if (
                     training_samples
