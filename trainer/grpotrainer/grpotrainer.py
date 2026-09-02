@@ -20,9 +20,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data import IterableDataset as TorchIterableDataset
 from tqdm import tqdm
-from typing import Any
+from typing import Any, List
 from trainer.base import Trainer
-from trainer.sfttrainer.sftconfig import SFTConfig
+from trainer.GRPOTrainer.sftconfig import SFTConfig
 from trainer.util import get_lr
 
 
@@ -35,32 +35,22 @@ class GRPOTrainer(Trainer):
         dataset_name,
         model,
         tokenizer,
+        reward_funcs: List,
         ds: Dataset | HFIterableDataset,
         config: SFTConfig,
         pre_resumption_pipeline:Any =None,
     ):
-        self.training_name = training_name
-        self.config = config
-        self.model = model
-        self.tokenizer = tokenizer
-        self.training_config = training_config
-        self.dataset_name = dataset_name
-        self.pipeline = pipeline
-        self.current_example = config.current_example
-        self.pre_resumption_pipeline = pre_resumption_pipeline
-
-        (
-            self.is_ddp,
-            self.rank,
-            self.local_rank,
-            self.world_size,
-        ) = self._setup_ddp(config)
-        self.is_main_process = (not self.is_ddp) or self.rank == 0
-
-        if self.is_ddp:
-            self.device = torch.device("cuda", self.local_rank)
-        else:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.reward_funcs = reward_funcs
+        super().__init__(
+           training_name,
+            training_config,
+            pipeline,
+            dataset_name,
+            model,
+            tokenizer, 
+            config, 
+            pre_resumption_pipeline
+        )
 
         if isinstance(ds, Dataset):
             Data = ds.train_test_split(test_size=config.test_train_ratio)
@@ -136,35 +126,41 @@ class GRPOTrainer(Trainer):
         self.scaler = torch.amp.GradScaler(
             self.device.type, enabled=(self.config.ptdtype == torch.float16)
         )
-
-        # Initiallize .csv files for Logging
-        if self.is_main_process:
-            self.init_csv(
-                f"{config.checkpoint_dir}/{training_name}/{self.pipeline}/logs_train.csv",
-                [
-                    "global_step",
-                    "num_examples",
-                    "loss",
-                    "perplexity",
-                    "entropy",
-                    "mean_token_accuracy",
-                    "learning_rate",
-                    "GNorm",
-                ],
-            )
-            self.init_csv(
-                f"{config.checkpoint_dir}/{training_name}/{self.pipeline}/logs_validation.csv",
-                [
-                    "global_step",
-                    "num_examples",
-                    "loss",
-                    "perplexity",
-                    "entropy",
-                    "mean_token_accuracy",
-                ],
-            )
-
         self._barrier()
+    
+    def get_grouped_advantages(self, kwargs):
+        rewards = [func(**kwargs) for func in self.reward_funcs]
+    
+        # Combine rewards element-wise, ignoring None
+        grouped_rewards = []
+        for items in zip(*rewards):
+            valid = [r for r in items if r is not None]
+            grouped_rewards.append(sum(valid) if valid else None)
+    
+        # Normalize valid grouped rewards
+        valid_rewards = [r for r in grouped_rewards if r is not None]
+    
+        if not valid_rewards:
+            return [None] * len(grouped_rewards)
+    
+        mean = sum(valid_rewards) / len(valid_rewards)
+    
+        variance = sum(
+            (r - mean) ** 2 for r in valid_rewards
+        ) / len(valid_rewards)
+    
+        std = variance ** 0.5
+    
+        if std == 0:
+            return [
+                0.0 if r is not None else None
+                for r in grouped_rewards
+            ]
+    
+        return [
+            (r - mean) / std if r is not None else None
+            for r in grouped_rewards
+        ]
 
     # -----------------------------------------------------------------
     # DDP HELPERS
@@ -302,17 +298,17 @@ class GRPOTrainer(Trainer):
     ):
         """
         Alternative to `torchrun` - spawns `world_size` local processes
-        with `torch.multiprocessing`, each running its own SFTTrainer,
+        with `torch.multiprocessing`, each running its own GRPOTrainer,
         and calls `.train()` on each. Use this when you want a single
         `python train.py` entrypoint to fan out to multiple GPUs itself,
         instead of invoking `torchrun --nproc_per_node=...` externally.
 
         `trainer_kwargs` are exactly the kwargs you'd otherwise pass to
-        `SFTTrainer(...)` (training_name, model, tokenizer, ds, config,
+        `GRPOTrainer(...)` (training_name, model, tokenizer, ds, config,
         current_example). They get pickled and sent to each spawned
         process, so:
             - `model` should still be on CPU (not `.to(device)` yet) -
-            SFTTrainer.__init__ moves it to the right device per rank.
+            GRPOTrainer.__init__ moves it to the right device per rank.
             - `ds`, if it's a streaming HF IterableDataset, must be
             picklable - this holds for the normal
             `load_dataset(..., streaming=True)` result, but custom
@@ -327,7 +323,7 @@ class GRPOTrainer(Trainer):
         os.environ.setdefault("MASTER_PORT", str(master_port))
 
         mp.spawn(
-            SFTTrainer._mp_entry,
+            GRPOTrainer._mp_entry,
             args=(world_size, trainer_kwargs),
             nprocs=world_size,
             join=True,
@@ -342,7 +338,7 @@ class GRPOTrainer(Trainer):
         os.environ["LOCAL_RANK"] = str(local_rank)
         os.environ["WORLD_SIZE"] = str(world_size)
 
-        trainer = SFTTrainer(**trainer_kwargs)
+        trainer = GRPOTrainer(**trainer_kwargs)
         trainer.train()
         
         del trainer
@@ -418,7 +414,7 @@ class GRPOTrainer(Trainer):
                 #     # into it we were (this drives both the LR schedule
                 #     # below and, more importantly, is what your training
                 #     # script should have used to `.skip(...)` the raw
-                #     # dataset via `SFTTrainer.peek_checkpoint(...)`
+                #     # dataset via `GRPOTrainer.peek_checkpoint(...)`
                 #     # BEFORE it was ever passed into this trainer -
                 #     # otherwise you'll be training over the same
                 #     # examples again from the start of the stream.
@@ -582,8 +578,7 @@ class GRPOTrainer(Trainer):
                                 
                                 # TODO: DO All
                                 responses = self.model.generate(batch_x, num_generation = 6)
-                                rewards = self.verifier(batch_x, responses)
-                                advantages = group_normalize(rewards)
+                                advantages = self.get_grouped_advantages(batch_x, responses)
                                 
                                 # 4. Compute policy log-probs
                                 logp = policy.log_probs(prompts, responses)
@@ -802,7 +797,7 @@ class GRPOTrainer(Trainer):
                                     "step": step,
                                     "val_loss": val_loss,
                                     # Global row count consumed so far -
-                                    # see `SFTTrainer.peek_checkpoint`.
+                                    # see `GRPOTrainer.peek_checkpoint`.
                                     "current_example": int(global_current_example),
                                     # Save the *unwrapped* model so the
                                     # checkpoint loads cleanly whether or

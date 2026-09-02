@@ -122,7 +122,7 @@ from Model.models import Model
 import asyncio
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate text using trained 10M GPT-2 or Advanced model.")
+    parser = argparse.ArgumentParser(description="Generate text using trained Autoregressive Transformer Model")
     parser.add_argument("--model", type=str, choices=["GPT","Alibi"], default="GPT",
                         help="Model architecture: GPT")
     parser.add_argument("--checkpoint", type=str, default=None,
@@ -142,7 +142,7 @@ def main():
         help="Pipeline process: pt, it,..",
     )
     parser.add_argument("--max_new_tokens", type=int, default=4096, help="Maximum number of tokens to generate")
-    parser.add_argument("--temperature", type=float, default=0.8, help="Temperature (0.0 for greedy)")
+    parser.add_argument("--temperature", type=float, default=0.5, help="Temperature (0.0 for greedy)")
     parser.add_argument("--top_k", type=int, default=40, help="Top-k filtering (0 to disable)")
     parser.add_argument("--top_p", type=float, default=0.9, help="Top-p/nucleus sampling (1.0 to disable)")
     
