@@ -140,6 +140,7 @@ from .util import (
     process_iftc,
     process_tc,
     process_warmup,
+    filter_valid
 )
 
 __all__ = [
@@ -151,5 +152,6 @@ __all__ = [
     "process_warmup",
     "preprocess_text_generation",
     "process_iftc",
-    "process_cot"
+    "process_cot",
+    "filter_valid"
 ]

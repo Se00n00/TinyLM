@@ -18,6 +18,7 @@ from Model.models import Model
 from trainer import (
     SFTConfig,
     SFTTrainer,
+    filter_valid,
     preprocess_rft,
     preprocess_text_generation,
     process_cot,
@@ -242,7 +243,7 @@ class Train:
                 dataset = dataset.map(
                     process_warmup, remove_columns=list(dataset.features.keys())
                 )
-                dataset = dataset.filter(lambda x: x["valid"])
+                dataset = dataset.filter(filter_valid)
                 dataset = dataset.remove_columns("valid")
 
                 return dataset

@@ -57,7 +57,9 @@ def flatten_conversations(example):
 
     return new_messages
     
-
+def filter_valid(example):
+    return example["valid"]
+    
 # def process_ift_dataset(dataset):
 #     for example in dataset:
 #         conversations = flatten_conversations(example)
