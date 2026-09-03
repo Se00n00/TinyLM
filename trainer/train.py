@@ -158,6 +158,7 @@ class Train:
                     grad_accum_steps=dataset.get(
                         "grad_accum_steps", args.grad_accum_steps
                     ),
+                    epochs=dataset['epochs'],
                     resume=args.resume,
                     learning_rate=float(dataset.get("learning_rate", 3e-4)),
                     logging_steps=args.log_interval,

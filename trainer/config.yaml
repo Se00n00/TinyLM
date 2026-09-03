@@ -1,8 +1,6 @@
 pipeline:
   - PT
   - IFT
-  - IFTC_2
-  - WARMUP
   - COT
   - TC
   # - IFT
@@ -88,21 +86,22 @@ dataset:
     - base: "HuggingFaceH4/ultrachat_200k"
       subset: NULL
       split: train_sft
-      limit: 207865
+      limit: NULL # 207865
       learning_rate: 5e-5
       max_seq_len: 2048
       batch_size: 2
       grad_accum_steps: 16
+      epochs: 4
   
-  IFTC_2:
-    - base: "stindardlogic/system-prompt-sft-50k"
-      subset: NULL
-      split: train
-      limit: NULL
-      max_seq_len: 2048
-      batch_size: 2
-      grad_accum_steps: 16
-      learning_rate: 1e-5
+  # IFTC_2:
+  #   - base: "stindardlogic/system-prompt-sft-50k"
+  #     subset: NULL
+  #     split: train
+  #     limit: NULL
+  #     max_seq_len: 2048
+  #     batch_size: 2
+  #     grad_accum_steps: 16
+  #     learning_rate: 1e-5
       
   # IFTC_1:
   #   - base: "teknium/OpenHermes-2.5"
@@ -114,15 +113,15 @@ dataset:
       # grad_accum_steps: 16
   #     learning_rate: 8e-5
   
-  WARMUP:
-    - base: "Se00n00/Warm-Up"
-      subset: NULL
-      split: train
-      limit: NULL
-      max_seq_len: 2048
-      batch_size: 2
-      grad_accum_steps: 16
-      learning_rate: 1e-5
+  # WARMUP:
+  #   - base: "Se00n00/Warm-Up"
+  #     subset: NULL
+  #     split: train
+  #     limit: NULL
+  #     max_seq_len: 2048
+  #     batch_size: 2
+  #     grad_accum_steps: 16
+  #     learning_rate: 1e-5
     
   # RFT:
   #   - base: "Scale-or-Reason/general-reasoning-ift-pairs"
@@ -142,6 +141,7 @@ dataset:
       batch_size: 2
       grad_accum_steps: 16
       learning_rate: 2e-5
+      epochs: 6
       
   TC:
     - base: "korotkov/glaive-function-calling-v2-parsed"
