@@ -441,6 +441,7 @@ class SFTTrainer(Trainer):
             # ---------------------------------------------
 
             for epoch in range(self.config.epochs):
+                print(f"\nTraining for an [{epoch+1}] EPOCH\n")
                 self._barrier()
                 train_bar = tqdm(
                     total=total_iterations,
