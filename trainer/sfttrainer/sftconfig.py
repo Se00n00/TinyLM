@@ -13,6 +13,7 @@ class SFTConfig:
     min_lr_ratio:float = 0.8
     max_test_rows:int = 10000
     label_idx:int = -100
+    epochs:int = 1
     
     
     # LEARNING PARAMETERS 

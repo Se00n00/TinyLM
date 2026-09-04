@@ -1,39 +1,50 @@
 pipeline:
   - PT
   - IFT
-  - IFTC_2
-  - IFTC_1
-  - WARMUP
-  - RFT
+  - COT
   - TC
+  # - IFT
+  # - IFTC_2
+  # - IFTC_1
+  # - WARMUP
+  # - RFT
+  # - TC
     
 dataset:
   PT:
+    - base: "Salesforce/wikitext"
+      subset: "wikitext-2-v1"
+      split: train
+      limit: NULL
+      learning_rate: 3e-4 
+      text_column: text
+      max_seq_len: 2048
+      batch_size: 2
+      grad_accum_steps: 16
+      
     - base: "HuggingFaceFW/fineweb-edu"
       subset: "sample-10BT"
       split: train
-      limit: 100 # 1000
-      learning_rate: 3e-4
+      limit: 1938594
+      learning_rate: 1e-4
       text_column: text
+      max_seq_len: 2048
+      batch_size: 2
+      grad_accum_steps: 16
     
-    # - base: "HuggingFaceFW/fineweb"
-    #   subset: "sample-10BT"
+    
+    
+    # - base: "bigcode/the-stack"
+    #   data_dir: "data/json"
     #   split: train
-    #   limit: 100 # 1000
-    #   learning_rate: 3e-4
-    #   text_column: text
+    #   limit: 10971
+    #   text_column: content
     
-    - base: "bigcode/the-stack"
-      data_dir: "data/json"
-      split: train
-      limit: 10971
-      text_column: content
-    
-    - base: "bigcode/the-stack"
-      data_dir: "data/shell"
-      split: train
-      limit: 98756
-      text_column: content
+    # - base: "bigcode/the-stack"
+    #   data_dir: "data/shell"
+    #   split: train
+    #   limit: 98756
+    #   text_column: content
     
     # - base: "HuggingFaceTB/smollm-corpus"
     #   subset: "cosmopedia-v2"
@@ -75,55 +86,69 @@ dataset:
     - base: "HuggingFaceH4/ultrachat_200k"
       subset: NULL
       split: train_sft
-      limit:  NULL
+      limit: NULL # 207865
       learning_rate: 1e-4
-  
-  IFTC_2:
-    - base: "stindardlogic/system-prompt-sft-50k"
-      subset: NULL
-      split: train
-      limit:  NULL
       max_seq_len: 2048
-      batch_size: 3
+      batch_size: 2
       grad_accum_steps: 16
-      learning_rate: 1e-4
+      epochs: 4
+  
+  # IFTC_2:
+  #   - base: "stindardlogic/system-prompt-sft-50k"
+  #     subset: NULL
+  #     split: train
+  #     limit: NULL
+  #     max_seq_len: 2048
+  #     batch_size: 2
+  #     grad_accum_steps: 16
+  #     learning_rate: 1e-5
       
-  IFTC_1:
-    - base: "teknium/OpenHermes-2.5"
-      subset: NULL
-      split: train
-      limit:  NULL
-      max_seq_len: 2048
-      batch_size: 2
-      grad_accum_steps: 16
-      learning_rate: 8e-5
+  # IFTC_1:
+  #   - base: "teknium/OpenHermes-2.5"
+  #     subset: NULL
+  #     split: train
+  #     limit:  NULL
+      # max_seq_len: 2048
+      # batch_size: 2
+      # grad_accum_steps: 16
+  #     learning_rate: 8e-5
   
-  WARMUP:
-    - base: "Se00n00/Warm-Up"
-      subset: NULL
-      split: train
-      limit:  NULL
-      max_seq_len: 2048
-      batch_size: 2
-      grad_accum_steps: 16
-      learning_rate: 8e-5
+  # WARMUP:
+  #   - base: "Se00n00/Warm-Up"
+  #     subset: NULL
+  #     split: train
+  #     limit: NULL
+  #     max_seq_len: 2048
+  #     batch_size: 2
+  #     grad_accum_steps: 16
+  #     learning_rate: 1e-5
     
-  RFT:
-    - base: "Scale-or-Reason/general-reasoning-ift-pairs"
+  # RFT:
+  #   - base: "Scale-or-Reason/general-reasoning-ift-pairs"
+  #     subset: NULL
+  #     split: reasoning_ift_pairs
+  #     limit: 330000
+  #     max_seq_len: 1024
+  #     batch_size: 4
+  #     grad_accum_steps: 16
+  #     learning_rate: 1e-5
+  COT:
+    - base: "Se00n00/reason_test"
       subset: NULL
-      split: reasoning_ift_pairs
-      limit: 330000
-      max_seq_len: 1024
-      batch_size: 4
+      split: train
+      limit: NULL
+      max_seq_len: 2048
+      batch_size: 2
       grad_accum_steps: 16
-      learning_rate: 1e-5
-  
+      learning_rate: 6e-5
+      epochs: 6
+      
   TC:
     - base: "korotkov/glaive-function-calling-v2-parsed"
       subset: NULL
       split: train
       limit: NULL
       max_seq_len: 2048
-      batch_size: 1
+      batch_size: 2
       grad_accum_steps: 16
-      learning_rate: 1e-5
+      learning_rate: 5e-6

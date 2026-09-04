@@ -420,13 +420,7 @@ class SFTTrainer(Trainer):
             )
         self._barrier()
 
-        train_bar = tqdm(
-            total=total_iterations,
-            desc="Training",
-            unit="ex",
-            dynamic_ncols=True,
-            disable=not self.is_main_process,
-        )
+        train_bar = None
 
         try:
             # NO WARMUP REQUIED FOR CONTINUED TRAINING
@@ -446,458 +440,469 @@ class SFTTrainer(Trainer):
             # TRAIN LOOP
             # ---------------------------------------------
 
-            Batches = iter(
-                self.get_batch(self.train_data, streaming=self.iterable_train_data)
-            )
-            EPOCH_COMPLETED = False
-            prev_log_example = -1
-            prev_eval_example = -1
-            while not EPOCH_COMPLETED:  # <-- Depends upon total_examples
-                # NOTE on DDP + GPU-temperature cooldown: this check runs
-                # per-rank against *that rank's own* GPU. If ranks are on
-                # different physical machines/cards with different
-                # thermals, one rank could sleep here while others don't,
-                # which risks a collective-op timeout during the next
-                # backward() all-reduce. Set config.ddp_sync_cooldown=False
-                # if you'd rather accept that risk than always throttle
-                # every rank to the slowest/hottest one; True (default)
-                # is a stronger guard but adds a barrier.
-                self.check_and_cooldown_gpu(
-                    self.config.max_temp, self.config.cooldown_temp
+            for epoch in range(self.config.epochs):
+                print(f"\nTraining for an [{epoch+1}] EPOCH\n")
+                self._barrier()
+                train_bar = tqdm(
+                    total=total_iterations,
+                    desc="Training",
+                    unit="ex",
+                    dynamic_ncols=True,
+                    disable=not self.is_main_process,
                 )
-                if self.is_ddp and self.config.ddp_sync_cooldown:
-                    self._barrier()
-
-                lr = get_lr(
-                    self.current_example,
-                    total_iterations,
-                    self.config.learning_rate,
-                    int(total_iterations * self.config.warmup_steps_ratio)
-                    if self.config.warmup_steps_ratio > 0
-                    else 2000,
-                    self.config.min_lr_ratio,
+                
+                Batches = iter(
+                    self.get_batch(self.train_data, streaming=self.iterable_train_data)
                 )
-                for param_group in self.optimizer.param_groups:
-                    param_group["lr"] = lr
-
-                step_completed = False
-                while not step_completed:
-                    torch.cuda.empty_cache()
-                    self.optimizer.zero_grad(set_to_none=True)
-
-                    loss_accum = 0.0
-                    entropy_accum = 0.0
-                    accuracy_accum = 0.0
-                    valid_micro_steps = 0
-
-                    self.check_vram_limit(self.config.vram_limit_mb, self.device)
-
-                    for micro_step in range(GRAD_ACCUM_STEPS):
-                        global_micro_step = step * GRAD_ACCUM_STEPS + micro_step
-
-                        batch = next(Batches, None)
-
-                        local_out_of_data = batch is None
-                        all_out_of_data = self._all_ranks_out_of_data(local_out_of_data)
-
-                        if all_out_of_data:
-                            EPOCH_COMPLETED = True
-                            break
-
-                        is_last_micro_step = (micro_step == GRAD_ACCUM_STEPS - 1)
-                        sync_context = (
-                            self.model.no_sync()
-                            if self.is_ddp and not is_last_micro_step
-                            else _nullcontext()
+                EPOCH_COMPLETED = False
+                prev_log_example = -1
+                prev_eval_example = -1
+                while not EPOCH_COMPLETED:  # <-- Depends upon total_examples
+                    # NOTE on DDP + GPU-temperature cooldown: this check runs
+                    # per-rank against *that rank's own* GPU. If ranks are on
+                    # different physical machines/cards with different
+                    # thermals, one rank could sleep here while others don't,
+                    # which risks a collective-op timeout during the next
+                    # backward() all-reduce. Set config.ddp_sync_cooldown=False
+                    # if you'd rather accept that risk than always throttle
+                    # every rank to the slowest/hottest one; True (default)
+                    # is a stronger guard but adds a barrier.
+                    self.check_and_cooldown_gpu(
+                        self.config.max_temp, self.config.cooldown_temp
+                    )
+                    if self.is_ddp and self.config.ddp_sync_cooldown:
+                        self._barrier()
+    
+                    lr = get_lr(
+                        self.current_example,
+                        total_iterations,
+                        self.config.learning_rate,
+                        int(total_iterations * self.config.warmup_steps_ratio)
+                        if self.config.warmup_steps_ratio > 0
+                        else 2000,
+                        self.config.min_lr_ratio,
+                    )
+                    for param_group in self.optimizer.param_groups:
+                        param_group["lr"] = lr
+    
+                    step_completed = False
+                    while not step_completed:
+                        torch.cuda.empty_cache()
+                        self.optimizer.zero_grad(set_to_none=True)
+    
+                        loss_accum = 0.0
+                        entropy_accum = 0.0
+                        accuracy_accum = 0.0
+                        valid_micro_steps = 0
+    
+                        self.check_vram_limit(self.config.vram_limit_mb, self.device)
+    
+                        for micro_step in range(GRAD_ACCUM_STEPS):
+                            global_micro_step = step * GRAD_ACCUM_STEPS + micro_step
+    
+                            batch = next(Batches, None)
+    
+                            local_out_of_data = batch is None
+                            all_out_of_data = self._all_ranks_out_of_data(local_out_of_data)
+    
+                            if all_out_of_data:
+                                EPOCH_COMPLETED = True
+                                break
+    
+                            is_last_micro_step = (micro_step == GRAD_ACCUM_STEPS - 1)
+                            sync_context = (
+                                self.model.no_sync()
+                                if self.is_ddp and not is_last_micro_step
+                                else _nullcontext()
+                            )
+    
+                            # ---------------------------------------------------
+                            # Every rank must call EXACTLY the same sequence of
+                            # collectives this micro-step regardless of which of
+                            # the three cases below it hits (out-of-data locally,
+                            # empty/all-masked batch, or a normal batch) - or the
+                            # ranks permanently desync their NCCL call count and
+                            # hang 30 min later on some future collective. So we
+                            # decide `local_bad_loss` uniformly first, always
+                            # call `_any_rank_bad_loss` exactly once, and then
+                            # always call exactly one backward() (real loss or
+                            # zero dummy loss) under the same sync_context.
+                            # ---------------------------------------------------
+                            if local_out_of_data:
+                                local_bad_loss = False
+                                is_empty_batch = True
+                            else:
+                                with autocast(
+                                    device_type=self.device.type, dtype=self.config.ptdtype
+                                ):
+                                    batch_x = batch["data"].to(self.device, non_blocking=True)
+                                    batch_y = batch["labels"].to(self.device, non_blocking=True)
+    
+                                    valid_tokens = (batch_y != self.config.label_idx).sum()
+    
+                                    logits = self.model(batch_x)
+                                    raw_loss = F.cross_entropy(
+                                        logits.view(-1, logits.size(-1)),
+                                        batch_y.view(-1),
+                                        ignore_index=self.config.label_idx,
+                                    )
+                                    batch_entropy, batch_accuracy = (
+                                        self.get_entropy_and_mean_token_accuracy(
+                                            logits, batch_y, self.config.label_idx
+                                        )
+                                    )
+    
+                                is_empty_batch = valid_tokens.item() == 0
+                                local_bad_loss = (
+                                    False if is_empty_batch else not torch.isfinite(raw_loss)
+                                )
+    
+                            any_bad_loss = self._any_rank_bad_loss(local_bad_loss)
+    
+                            if any_bad_loss:
+                                if local_bad_loss and self.is_main_process:
+                                    print("Non-finite loss encountered.")
+                                self.optimizer.zero_grad(set_to_none=True)
+                                step_completed = False
+                                break
+    
+                            if local_out_of_data:
+                                zero_loss = sum(
+                                    (p.sum() for p in self.model.parameters()),
+                                    start=torch.zeros((), device=self.device),
+                                ) * 0.0
+                                with sync_context:
+                                    zero_loss.backward()
+                                continue
+    
+                            if is_empty_batch:
+                                zero_loss = (logits.sum() * 0.0) / GRAD_ACCUM_STEPS
+                                with sync_context:
+                                    zero_loss.backward()
+                                consumed += 1
+                                continue
+    
+                            valid_micro_steps += 1
+                            loss_accum += raw_loss.item()
+                            entropy_accum += batch_entropy
+                            accuracy_accum += batch_accuracy
+    
+                            loss = raw_loss / GRAD_ACCUM_STEPS
+    
+                            with sync_context:
+                                if self.config.ptdtype == torch.float16:
+                                    self.scaler.scale(loss).backward()
+                                else:
+                                    loss.backward()
+    
+                            consumed += 1
+    
+                        if valid_micro_steps == 0:
+                            self.optimizer.zero_grad(set_to_none=True)
+                            step_completed = False
+                            if EPOCH_COMPLETED:
+                                break
+                            continue
+    
+                        loss_accum /= GRAD_ACCUM_STEPS
+                        entropy = entropy_accum / GRAD_ACCUM_STEPS
+                        mean_token_accuracy = accuracy_accum / GRAD_ACCUM_STEPS
+    
+                        if self.config.ptdtype == torch.float16:
+                            self.scaler.unscale_(self.optimizer)
+    
+                        grad_norm = torch.nn.utils.clip_grad_norm_(
+                            self.model.parameters(),
+                            1.0,
                         )
-
-                        # ---------------------------------------------------
-                        # Every rank must call EXACTLY the same sequence of
-                        # collectives this micro-step regardless of which of
-                        # the three cases below it hits (out-of-data locally,
-                        # empty/all-masked batch, or a normal batch) - or the
-                        # ranks permanently desync their NCCL call count and
-                        # hang 30 min later on some future collective. So we
-                        # decide `local_bad_loss` uniformly first, always
-                        # call `_any_rank_bad_loss` exactly once, and then
-                        # always call exactly one backward() (real loss or
-                        # zero dummy loss) under the same sync_context.
-                        # ---------------------------------------------------
-                        if local_out_of_data:
-                            local_bad_loss = False
-                            is_empty_batch = True
+    
+                        if self.config.ptdtype == torch.float16:
+                            self.scaler.step(self.optimizer)
+                            self.scaler.update()
                         else:
-                            with autocast(
-                                device_type=self.device.type, dtype=self.config.ptdtype
+                            self.optimizer.step()
+    
+                        step_completed = True
+    
+                    if self.is_main_process:
+                        train_bar.n = min(self.current_example, total_iterations)
+                        train_bar.refresh()
+    
+                    elapsed = time.time() - t_start
+    
+                    sync_example = self._broadcast_int(self.current_example, src=0)
+    
+                    if self.is_main_process:
+                        postfix = {
+                            "remaining": max(0, total_iterations - self.current_example)
+                        }
+                        if elapsed > 0:
+                            postfix["Batch Throughput"] = f"{consumed / elapsed:.2f}"
+                            postfix["Batchs"] = f"{consumed}"
+                        train_bar.set_postfix(postfix)
+    
+                    # -------------------------------------------------------
+                    # EVAL STEP/
+                    # -------------------------------------------------------
+                    if ( sync_example % self.config.eval_steps == 0 and sync_example > 0 and prev_eval_example != sync_example ) or (
+                        EPOCH_COMPLETED == True
+                    ):
+                        self.model.eval()
+                        val_loss = 0.0
+                        val_entropy, val_mean_token_accuracy = 0.0, 0.0
+                        prev_eval_example = sync_example
+    
+                        if self.is_main_process:
+                            total_eval_loss = 0.0
+                            total_valid_tokens = 0
+                            eval_steps = 0
+    
+                            val_pbar = tqdm(desc="Initial Validation" if sync_example == 0 else "Validation")
+                            for batch in self.get_batch(
+                                self.test_data, streaming=False, count_examples=False
                             ):
                                 batch_x = batch["data"].to(self.device, non_blocking=True)
                                 batch_y = batch["labels"].to(self.device, non_blocking=True)
-
+    
                                 valid_tokens = (batch_y != self.config.label_idx).sum()
-
-                                logits = self.model(batch_x)
-                                raw_loss = F.cross_entropy(
-                                    logits.view(-1, logits.size(-1)),
-                                    batch_y.view(-1),
-                                    ignore_index=self.config.label_idx,
-                                )
-                                batch_entropy, batch_accuracy = (
-                                    self.get_entropy_and_mean_token_accuracy(
-                                        logits, batch_y, self.config.label_idx
+    
+                                if valid_tokens.item() == 0:
+                                    val_pbar.update(1)
+                                    continue
+    
+                                with autocast(
+                                    device_type=self.device.type, dtype=torch.float16
+                                ):
+                                    logits = self.raw_model(batch_x)
+                                    loss = F.cross_entropy(
+                                        logits.view(-1, logits.size(-1)),
+                                        batch_y.view(-1),
+                                        ignore_index=self.config.label_idx,
                                     )
-                                )
-
-                            is_empty_batch = valid_tokens.item() == 0
-                            local_bad_loss = (
-                                False if is_empty_batch else not torch.isfinite(raw_loss)
-                            )
-
-                        any_bad_loss = self._any_rank_bad_loss(local_bad_loss)
-
-                        if any_bad_loss:
-                            if local_bad_loss and self.is_main_process:
-                                print("Non-finite loss encountered.")
-                            self.optimizer.zero_grad(set_to_none=True)
-                            step_completed = False
-                            break
-
-                        if local_out_of_data:
-                            zero_loss = sum(
-                                (p.sum() for p in self.model.parameters()),
-                                start=torch.zeros((), device=self.device),
-                            ) * 0.0
-                            with sync_context:
-                                zero_loss.backward()
-                            continue
-
-                        if is_empty_batch:
-                            zero_loss = (logits.sum() * 0.0) / GRAD_ACCUM_STEPS
-                            with sync_context:
-                                zero_loss.backward()
-                            consumed += 1
-                            continue
-
-                        valid_micro_steps += 1
-                        loss_accum += raw_loss.item()
-                        entropy_accum += batch_entropy
-                        accuracy_accum += batch_accuracy
-
-                        loss = raw_loss / GRAD_ACCUM_STEPS
-
-                        with sync_context:
-                            if self.config.ptdtype == torch.float16:
-                                self.scaler.scale(loss).backward()
-                            else:
-                                loss.backward()
-
-                        consumed += 1
-
-                    if valid_micro_steps == 0:
-                        self.optimizer.zero_grad(set_to_none=True)
-                        step_completed = False
-                        if EPOCH_COMPLETED:
-                            break
-                        continue
-
-                    loss_accum /= GRAD_ACCUM_STEPS
-                    entropy = entropy_accum / GRAD_ACCUM_STEPS
-                    mean_token_accuracy = accuracy_accum / GRAD_ACCUM_STEPS
-
-                    if self.config.ptdtype == torch.float16:
-                        self.scaler.unscale_(self.optimizer)
-
-                    grad_norm = torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(),
-                        1.0,
-                    )
-
-                    if self.config.ptdtype == torch.float16:
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                    else:
-                        self.optimizer.step()
-
-                    step_completed = True
-
-                if self.is_main_process:
-                    train_bar.n = min(self.current_example, total_iterations)
-                    train_bar.refresh()
-
-                elapsed = time.time() - t_start
-
-                sync_example = self._broadcast_int(self.current_example, src=0)
-
-                if self.is_main_process:
-                    postfix = {
-                        "remaining": max(0, total_iterations - self.current_example)
-                    }
-                    if elapsed > 0:
-                        postfix["Batch Throughput"] = f"{consumed / elapsed:.2f}"
-                        postfix["Batchs"] = f"{consumed}"
-                    train_bar.set_postfix(postfix)
-
-                # -------------------------------------------------------
-                # EVAL STEP/
-                # -------------------------------------------------------
-                if ( sync_example % self.config.eval_steps == 0 and sync_example > 0 and prev_eval_example != sync_example ) or (
-                    EPOCH_COMPLETED == True
-                ):
-                    self.model.eval()
-                    val_loss = 0.0
-                    val_entropy, val_mean_token_accuracy = 0.0, 0.0
-                    prev_eval_example = sync_example
-
-                    if self.is_main_process:
-                        total_eval_loss = 0.0
-                        total_valid_tokens = 0
-                        eval_steps = 0
-
-                        val_pbar = tqdm(desc="Initial Validation" if sync_example == 0 else "Validation")
-                        for batch in self.get_batch(
-                            self.test_data, streaming=False, count_examples=False
-                        ):
-                            batch_x = batch["data"].to(self.device, non_blocking=True)
-                            batch_y = batch["labels"].to(self.device, non_blocking=True)
-
-                            valid_tokens = (batch_y != self.config.label_idx).sum()
-
-                            if valid_tokens.item() == 0:
+                                    batch_entropy, batch_mean_token_accuracy = (
+                                        self.get_entropy_and_mean_token_accuracy(
+                                            logits, batch_y, self.config.label_idx
+                                        )
+                                    )
+    
+                                total_eval_loss += loss.item()
+                                total_valid_tokens += 1
+                                val_entropy += batch_entropy
+                                val_mean_token_accuracy += batch_mean_token_accuracy
+                                eval_steps += 1
                                 val_pbar.update(1)
-                                continue
-
-                            with autocast(
-                                device_type=self.device.type, dtype=torch.float16
-                            ):
-                                logits = self.raw_model(batch_x)
-                                loss = F.cross_entropy(
-                                    logits.view(-1, logits.size(-1)),
-                                    batch_y.view(-1),
-                                    ignore_index=self.config.label_idx,
-                                )
-                                batch_entropy, batch_mean_token_accuracy = (
-                                    self.get_entropy_and_mean_token_accuracy(
-                                        logits, batch_y, self.config.label_idx
-                                    )
-                                )
-
-                            total_eval_loss += loss.item()
-                            total_valid_tokens += 1
-                            val_entropy += batch_entropy
-                            val_mean_token_accuracy += batch_mean_token_accuracy
-                            eval_steps += 1
-                            val_pbar.update(1)
-                        val_pbar.close()
-
-                        if total_valid_tokens > 0:
-                            val_loss = total_eval_loss / total_valid_tokens
-                        else:
-                            val_loss = float("nan")
-
-                        if eval_steps > 0:
-                            val_entropy /= eval_steps
-                            val_mean_token_accuracy /= eval_steps
-                        else:
-                            val_entropy = float("nan")
-                            val_mean_token_accuracy = float("nan")
-
-                    # print(f"VALIDATION: {self.local_rank}")
-                    # Make sure no rank races ahead into more training
-                    self._barrier()
-
-                    global_current_example = self._reduce_sum(self.current_example)
-
-                    val_ppl = math.exp(val_loss) if val_loss < 1000 else float("inf")
-                    train_ppl = (
-                        math.exp(loss_accum) if loss_accum < 1000 else float("inf")
-                    )
-                    self.model.train()
-
-                    allocated_mb = (
-                        torch.cuda.memory_allocated(self.device) / (1024 * 1024)
-                        if self.device.type == "cuda"
-                        else 0.0
-                    )
-                    temp_str = (
-                        f" | Temp: {self.get_gpu_temperature()}°C"
-                        if self.get_gpu_temperature() is not None
-                        else ""
-                    )
-
-                    if self.is_main_process:
-                        tqdm.write(
-                            f"Current Example {sync_example} | "
-                            f"Train Loss: {loss_accum:.4f} (PPL: {train_ppl:.2f}) | "
-                            f"Val Loss: {val_loss:.4f} (PPL: {val_ppl:.2f}) | "
-                            f"Grad Norm: {grad_norm:.2f} | "
-                            f"Step Time: {elapsed * 1000:.1f}ms | "
-                            f"VRAM: {allocated_mb:.1f}MB" + temp_str
+                            val_pbar.close()
+    
+                            if total_valid_tokens > 0:
+                                val_loss = total_eval_loss / total_valid_tokens
+                            else:
+                                val_loss = float("nan")
+    
+                            if eval_steps > 0:
+                                val_entropy /= eval_steps
+                                val_mean_token_accuracy /= eval_steps
+                            else:
+                                val_entropy = float("nan")
+                                val_mean_token_accuracy = float("nan")
+    
+                        # print(f"VALIDATION: {self.local_rank}")
+                        # Make sure no rank races ahead into more training
+                        self._barrier()
+    
+                        global_current_example = self._reduce_sum(self.current_example)
+    
+                        val_ppl = math.exp(val_loss) if val_loss < 1000 else float("inf")
+                        train_ppl = (
+                            math.exp(loss_accum) if loss_accum < 1000 else float("inf")
                         )
-
-                        if val_loss < self.best_val_loss:
-                            self.best_val_loss = val_loss
+                        self.model.train()
+    
+                        allocated_mb = (
+                            torch.cuda.memory_allocated(self.device) / (1024 * 1024)
+                            if self.device.type == "cuda"
+                            else 0.0
+                        )
+                        temp_str = (
+                            f" | Temp: {self.get_gpu_temperature()}°C"
+                            if self.get_gpu_temperature() is not None
+                            else ""
+                        )
+    
+                        if self.is_main_process:
+                            tqdm.write(
+                                f"Current Example {sync_example} | "
+                                f"Train Loss: {loss_accum:.4f} (PPL: {train_ppl:.2f}) | "
+                                f"Val Loss: {val_loss:.4f} (PPL: {val_ppl:.2f}) | "
+                                f"Grad Norm: {grad_norm:.2f} | "
+                                f"Step Time: {elapsed * 1000:.1f}ms | "
+                                f"VRAM: {allocated_mb:.1f}MB" + temp_str
+                            )
+    
+                            if val_loss < self.best_val_loss:
+                                self.best_val_loss = val_loss
+                                checkpoint_path = os.path.join(
+                                    self.config.checkpoint_dir,
+                                    f"{self.training_name}/{self.pipeline}/best.pt",
+                                )
+                                torch.save(
+                                    {
+                                        "step": step,
+                                        "val_loss": val_loss,
+                                        # Global row count consumed so far -
+                                        # see `SFTTrainer.peek_checkpoint`.
+                                        "current_example": int(global_current_example),
+                                        # Save the *unwrapped* model so the
+                                        # checkpoint loads cleanly whether or
+                                        # not it's later resumed under DDP.
+                                        "model_state_dict": self.raw_model.state_dict(),
+                                        "optimizer_state_dict": self.optimizer.state_dict(),
+                                        "run_meta": run_meta,
+                                    },
+                                    checkpoint_path,
+                                )
+                                tqdm.write(
+                                    f"  [Checkpoint] Saved best model to {checkpoint_path} (Val Loss: {val_loss:.4f})"
+                                )
+    
+                            # TRAINING LOGGING: STEP, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY
+                            self.log_metrics(
+                                f"{self.config.checkpoint_dir}/{self.training_name}/{self.pipeline}/logs_validation.csv",
+                                [
+                                    self.training_config['global_current_example'] + (self.config.logging_steps * self.world_size),
+                                    int(global_current_example),
+                                    val_loss,
+                                    val_ppl,
+                                    val_entropy,
+                                    val_mean_token_accuracy,
+                                ],
+                            )
+                        # print(f"VALIDATION --> SAVING: {self.local_rank}")
+                        # Make sure no rank races ahead into more training
+                        # steps while rank 0 is still writing the checkpoint.
+                        self._barrier()
+    
+                    # TRAINING LOGGING: STEP, NUM_TOKENS, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY, LR, GRAD_NORM
+                    # print(f"\nEXAMPLE: {self.current_example} | PREV_LOG_EXAMPLE: {prev_log_example} | LOG: {self.current_example % self.config.logging_steps == 0 and self.current_example != prev_log_example}\n")
+                    if ( sync_example % self.config.logging_steps == 0 and sync_example != prev_log_example ) or (
+                        EPOCH_COMPLETED == True
+                    ):
+                        prev_log_example = sync_example
+    
+                        global_current_example_log = self._reduce_sum(self.current_example)
+    
+                        if self.is_main_process:
+                            train_ppl = (
+                                math.exp(loss_accum) if loss_accum < 1000 else float("inf")
+                            )
+    
+                            self.log_metrics(
+                                f"{self.config.checkpoint_dir}/{self.training_name}/{self.pipeline}/logs_train.csv",
+                                [
+                                    self.training_config['global_current_example'] + (self.config.logging_steps * self.world_size),
+                                    sync_example * self.world_size,
+                                    loss_accum,
+                                    train_ppl,
+                                    entropy,
+                                    mean_token_accuracy,
+                                    lr,
+                                    grad_norm.item(),
+                                ],
+                            )
+    
                             checkpoint_path = os.path.join(
                                 self.config.checkpoint_dir,
-                                f"{self.training_name}/{self.pipeline}/best.pt",
+                                f"{self.training_name}/{self.pipeline}/model.pt",
                             )
                             torch.save(
                                 {
                                     "step": step,
-                                    "val_loss": val_loss,
-                                    # Global row count consumed so far -
-                                    # see `SFTTrainer.peek_checkpoint`.
-                                    "current_example": int(global_current_example),
-                                    # Save the *unwrapped* model so the
-                                    # checkpoint loads cleanly whether or
-                                    # not it's later resumed under DDP.
+                                    "val_loss": self.best_val_loss,
                                     "model_state_dict": self.raw_model.state_dict(),
                                     "optimizer_state_dict": self.optimizer.state_dict(),
                                     "run_meta": run_meta,
                                 },
                                 checkpoint_path,
                             )
-                            tqdm.write(
-                                f"  [Checkpoint] Saved best model to {checkpoint_path} (Val Loss: {val_loss:.4f})"
+    
+                            config_data = self.training_config
+                            target_idx = next(
+                                idx
+                                for idx, d in enumerate(
+                                    self.training_config["pipeline"][self.pipeline]
+                                )
+                                if d["dataset"] == self.dataset_name
                             )
-
-                        # TRAINING LOGGING: STEP, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY
-                        self.log_metrics(
-                            f"{self.config.checkpoint_dir}/{self.training_name}/{self.pipeline}/logs_validation.csv",
-                            [
-                                self.training_config['global_current_example'] + (self.config.logging_steps * self.world_size),
-                                int(global_current_example),
-                                val_loss,
-                                val_ppl,
-                                val_entropy,
-                                val_mean_token_accuracy,
-                            ],
-                        )
-                    # print(f"VALIDATION --> SAVING: {self.local_rank}")
-                    # Make sure no rank races ahead into more training
-                    # steps while rank 0 is still writing the checkpoint.
-                    self._barrier()
-
-                # TRAINING LOGGING: STEP, NUM_TOKENS, LOSS, PERPLEXITY, ENTROPY, MEAN_TOKEN_ACCURACY, LR, GRAD_NORM
-                # print(f"\nEXAMPLE: {self.current_example} | PREV_LOG_EXAMPLE: {prev_log_example} | LOG: {self.current_example % self.config.logging_steps == 0 and self.current_example != prev_log_example}\n")
-                if ( sync_example % self.config.logging_steps == 0 and sync_example != prev_log_example ) or (
-                    EPOCH_COMPLETED == True
-                ):
-                    prev_log_example = sync_example
-
-                    global_current_example_log = self._reduce_sum(self.current_example)
-
-                    if self.is_main_process:
-                        train_ppl = (
-                            math.exp(loss_accum) if loss_accum < 1000 else float("inf")
-                        )
-
-                        self.log_metrics(
-                            f"{self.config.checkpoint_dir}/{self.training_name}/{self.pipeline}/logs_train.csv",
-                            [
-                                self.training_config['global_current_example'] + (self.config.logging_steps * self.world_size),
-                                sync_example * self.world_size,
-                                loss_accum,
-                                train_ppl,
-                                entropy,
-                                mean_token_accuracy,
-                                lr,
-                                grad_norm.item(),
-                            ],
-                        )
-
-                        checkpoint_path = os.path.join(
-                            self.config.checkpoint_dir,
-                            f"{self.training_name}/{self.pipeline}/model.pt",
-                        )
-                        torch.save(
-                            {
+    
+                            config_data["pipeline"][self.pipeline][target_idx][
+                                "trained"
+                            ] = global_current_example_log
+                            config_data["pipeline"][self.pipeline][target_idx][
+                                "completed"
+                            ] = bool(EPOCH_COMPLETED)
+    
+                            # print(f"\n\nCURRENT EXAMPLE: {config_data['global_current_example']} | INCREMENT: {(self.config.logging_steps * self.world_size) if sync_example > 0 else 0} | REAL GLOBAL EXAMPLE: {global_current_example_log} | EXPECTED {sync_example * self.world_size}\n\n")
+                            config_data['global_current_example'] += (self.config.logging_steps * self.world_size) if sync_example > 0 else 0
+                            config_data['current_pipeline'] = self.pipeline
+    
+                            training_path = os.path.join(
+                                f"{self.config.checkpoint_dir}/{self.training_name}",
+                                "training.yaml",
+                            )
+                            with open(training_path, "w") as file:
+                                yaml.safe_dump(
+                                    config_data,
+                                    file,
+                                    sort_keys=False,
+                                    default_flow_style=False,
+                                )
+    
+                        # print(f"VALIDATION --> SAVING --> CONFIG & NORMAL SAVE: {self.local_rank}")
+                        self._barrier()
+    
+                    # -------------------------------------------------------
+                    # FINAL CHECKPOINT — ALWAYS SAVE WHEN EPOCH COMPLETES
+                    # -------------------------------------------------------
+                    if EPOCH_COMPLETED:
+                        self._barrier()
+    
+                        if self.is_main_process:
+                            final_checkpoint_path = os.path.join(
+                                self.config.checkpoint_dir,
+                                f"{self.training_name}/{self.pipeline}/model.pt",
+                            )
+    
+                            final_tmp_path = final_checkpoint_path + ".tmp"
+    
+                            checkpoint = {
                                 "step": step,
                                 "val_loss": self.best_val_loss,
+                                "current_example": int(
+                                    self._reduce_sum(self.current_example)
+                                ),
                                 "model_state_dict": self.raw_model.state_dict(),
                                 "optimizer_state_dict": self.optimizer.state_dict(),
                                 "run_meta": run_meta,
-                            },
-                            checkpoint_path,
-                        )
-
-                        config_data = self.training_config
-                        target_idx = next(
-                            idx
-                            for idx, d in enumerate(
-                                self.training_config["pipeline"][self.pipeline]
+                            }
+    
+                            # Write temporary file first
+                            torch.save(checkpoint, final_tmp_path)
+    
+                            # Atomic replacement
+                            os.replace(final_tmp_path, final_checkpoint_path)
+    
+                            print(
+                                f"\n[FINAL CHECKPOINT] Saved successfully:\n"
+                                f"{final_checkpoint_path}\n"
+                                f"step={step}\n"
+                                f"current_example={checkpoint['current_example']}\n"
                             )
-                            if d["dataset"] == self.dataset_name
-                        )
-
-                        config_data["pipeline"][self.pipeline][target_idx][
-                            "trained"
-                        ] = global_current_example_log
-                        config_data["pipeline"][self.pipeline][target_idx][
-                            "completed"
-                        ] = bool(EPOCH_COMPLETED)
-
-                        # print(f"\n\nCURRENT EXAMPLE: {config_data['global_current_example']} | INCREMENT: {(self.config.logging_steps * self.world_size) if sync_example > 0 else 0} | REAL GLOBAL EXAMPLE: {global_current_example_log} | EXPECTED {sync_example * self.world_size}\n\n")
-                        config_data['global_current_example'] += (self.config.logging_steps * self.world_size) if sync_example > 0 else 0
-                        config_data['current_pipeline'] = self.pipeline
-
-                        training_path = os.path.join(
-                            f"{self.config.checkpoint_dir}/{self.training_name}",
-                            "training.yaml",
-                        )
-                        with open(training_path, "w") as file:
-                            yaml.safe_dump(
-                                config_data,
-                                file,
-                                sort_keys=False,
-                                default_flow_style=False,
-                            )
-
-                    # print(f"VALIDATION --> SAVING --> CONFIG & NORMAL SAVE: {self.local_rank}")
-                    self._barrier()
-
-                # -------------------------------------------------------
-                # FINAL CHECKPOINT — ALWAYS SAVE WHEN EPOCH COMPLETES
-                # -------------------------------------------------------
-                if EPOCH_COMPLETED:
-                    self._barrier()
-
-                    if self.is_main_process:
-                        final_checkpoint_path = os.path.join(
-                            self.config.checkpoint_dir,
-                            f"{self.training_name}/{self.pipeline}/model.pt",
-                        )
-
-                        final_tmp_path = final_checkpoint_path + ".tmp"
-
-                        checkpoint = {
-                            "step": step,
-                            "val_loss": self.best_val_loss,
-                            "current_example": int(
-                                self._reduce_sum(self.current_example)
-                            ),
-                            "model_state_dict": self.raw_model.state_dict(),
-                            "optimizer_state_dict": self.optimizer.state_dict(),
-                            "run_meta": run_meta,
-                        }
-
-                        # Write temporary file first
-                        torch.save(checkpoint, final_tmp_path)
-
-                        # Atomic replacement
-                        os.replace(final_tmp_path, final_checkpoint_path)
-
-                        print(
-                            f"\n[FINAL CHECKPOINT] Saved successfully:\n"
-                            f"{final_checkpoint_path}\n"
-                            f"step={step}\n"
-                            f"current_example={checkpoint['current_example']}\n"
-                        )
-
-                    self._barrier()
-
-                step += 1
-
-            if self.is_main_process:
-                train_bar.close()
+    
+                        self._barrier()
+    
+                    step += 1
+    
+                if self.is_main_process:
+                    train_bar.close()
 
             # print(f"TIMES INCREMENTED: {incremented} | INCREMENT AMOUNT: {self.config.logging_steps * self.world_size}")
         except RuntimeError as e:

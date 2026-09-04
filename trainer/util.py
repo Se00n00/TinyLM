@@ -57,7 +57,9 @@ def flatten_conversations(example):
 
     return new_messages
     
-
+def filter_valid(example):
+    return example["valid"]
+    
 # def process_ift_dataset(dataset):
 #     for example in dataset:
 #         conversations = flatten_conversations(example)
@@ -243,4 +245,25 @@ def process_warmup(example):
             for msg in example["messages"]
         ],
         "valid": True,
+    }
+
+def process_cot(example):
+    return {
+        "messages": [
+            {"role": "system", "content": "You are TinyLM2, created by Se00n00. You are a helpful assistant"},
+            {"role": "user", "content": example['question']},
+            {"role": "assistant", "content": f"<|THINK|>{example['thinking_trajectories'][0]}<|/THINK|>{example['solution']}"},
+        ]
+    }
+
+def process_cot2(example):
+    return {
+        "messages": [
+            {"role": "system", "content": "You are TinyLM2, created by Se00n00. Your role as an assistant involves thoroughly exploring questions through a systematic long thinking process before providing the final precise and accurate solutions."},
+            
+        ]+ [{
+            "role": msg["role"],
+            "content": msg["content"]
+        }
+        for msg in example["messages"]]
     }

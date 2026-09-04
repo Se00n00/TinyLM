@@ -9,9 +9,50 @@ import time
 # from models import GPT2LMHeadModel, AdvancedLMHeadModel
 
 SYSTEM_PROMPT = """
-You are a helpful, conversational AI companion and always provide user with answer
+"You are TinyLM2, created by Se00n00. Your role as an assistant involves thoroughly exploring questions through a systematic long thinking process before providing the final precise and accurate solutions.   
 """
 
+TOOLS = [
+  {
+    "name": "get_weather",
+    "description": "Get the current weather for a city.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string"
+        }
+      },
+      "required": ["city"]
+    }
+  },
+  {
+    "name": "calculator",
+    "description": "Calculate a mathematical expression.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "expression": {
+          "type": "string"
+        }
+      },
+      "required": ["expression"]
+    }
+  },
+  {
+    "name": "get_time",
+    "description": "Get the current time for a city.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "city": {
+          "type": "string"
+        }
+      },
+      "required": ["city"]
+    }
+  }
+]
 @torch.no_grad()
 async def generate(model, tokenizer, user_prompt, max_new_tokens, max_thinking = 150, system_prompt:str|None=None, temperature=1.0, top_k=50, top_p=0.9, max_seq_len:int|None=40000, device="cpu"):
     
@@ -20,8 +61,20 @@ async def generate(model, tokenizer, user_prompt, max_new_tokens, max_thinking =
     else:
         prompt = user_prompt
     
+    prefix_messages = [
+        {"role":"system","content":system_prompt},
+        {"role":"user","content":user_prompt}
+    ]
     # 1. ENCODE PROMPT
-    input_ids = tokenizer.encode("<|START|>"+prompt)
+    # input_ids = tokenizer.encode("<|START|>"+prompt)
+    # input_ids = tokenizer.apply_chat_template()
+    input_ids = tokenizer.apply_chat_template(
+        prefix_messages,
+        tokenize=True,
+        add_generation_prompt=True,
+    )['input_ids']
+    # print(tokenizer.chat_template)
+    # print("\n\n",tokenizer.decode(input_ids),"\n\n")
     eos_id = tokenizer.encode(tokenizer.eos_token)[0]
     bos_id = tokenizer.encode(tokenizer.bos_token)[0]
     thinking_start = tokenizer.encode("<|THINK|>")[0]
