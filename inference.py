@@ -9,13 +9,7 @@ import time
 # from models import GPT2LMHeadModel, AdvancedLMHeadModel
 
 SYSTEM_PROMPT = """
-You are a helpful assistant with access to tools.
-
-Use a tool when it is needed to answer the user's request.
-Do not use a tool when you can answer without one.
-Available tools have names and arguments. When using a tool, provide the required arguments exactly.
-After receiving a tool result, use it to answer the user clearly.
-Do not invent tool results.    
+"You are TinyLM2, created by Se00n00. Your role as an assistant involves thoroughly exploring questions through a systematic long thinking process before providing the final precise and accurate solutions.   
 """
 
 TOOLS = [
@@ -67,10 +61,10 @@ async def generate(model, tokenizer, user_prompt, max_new_tokens, max_thinking =
     else:
         prompt = user_prompt
     
-    prefix_messages = {"messages":[
+    prefix_messages = [
         {"role":"system","content":system_prompt},
         {"role":"user","content":user_prompt}
-    ]}
+    ]
     # 1. ENCODE PROMPT
     # input_ids = tokenizer.encode("<|START|>"+prompt)
     # input_ids = tokenizer.apply_chat_template()
@@ -79,7 +73,8 @@ async def generate(model, tokenizer, user_prompt, max_new_tokens, max_thinking =
         tokenize=True,
         add_generation_prompt=True,
     )['input_ids']
-    print(tokenizer.decode(input_ids))
+    # print(tokenizer.chat_template)
+    # print("\n\n",tokenizer.decode(input_ids),"\n\n")
     eos_id = tokenizer.encode(tokenizer.eos_token)[0]
     bos_id = tokenizer.encode(tokenizer.bos_token)[0]
     thinking_start = tokenizer.encode("<|THINK|>")[0]

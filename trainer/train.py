@@ -26,6 +26,7 @@ from trainer import (
     process_iftc,
     process_tc,
     process_warmup,
+    process_cot2
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -158,7 +159,7 @@ class Train:
                     grad_accum_steps=dataset.get(
                         "grad_accum_steps", args.grad_accum_steps
                     ),
-                    epochs=dataset['epochs'],
+                    epochs=dataset.get('epochs', 1),
                     resume=args.resume,
                     learning_rate=float(dataset.get("learning_rate", 3e-4)),
                     logging_steps=args.log_interval,
@@ -250,10 +251,16 @@ class Train:
 
                 return dataset
 
+            # case "COT":
+            #     return dataset.map(
+            #         process_cot, remove_columns=list(dataset.features.keys())
+            #     )
+                
             case "COT":
                 return dataset.map(
-                    process_cot, remove_columns=list(dataset.features.keys())
+                    process_cot2, remove_columns=list(dataset.features.keys())
                 )
+                
 
             case "PT":
                 return dataset.map(

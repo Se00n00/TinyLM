@@ -255,3 +255,15 @@ def process_cot(example):
             {"role": "assistant", "content": f"<|THINK|>{example['thinking_trajectories'][0]}<|/THINK|>{example['solution']}"},
         ]
     }
+
+def process_cot2(example):
+    return {
+        "messages": [
+            {"role": "system", "content": "You are TinyLM2, created by Se00n00. Your role as an assistant involves thoroughly exploring questions through a systematic long thinking process before providing the final precise and accurate solutions."},
+            
+        ]+ [{
+            "role": msg["role"],
+            "content": msg["content"]
+        }
+        for msg in example["messages"]]
+    }

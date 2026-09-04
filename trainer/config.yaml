@@ -87,7 +87,7 @@ dataset:
       subset: NULL
       split: train_sft
       limit: NULL # 207865
-      learning_rate: 5e-5
+      learning_rate: 1e-4
       max_seq_len: 2048
       batch_size: 2
       grad_accum_steps: 16
@@ -133,14 +133,14 @@ dataset:
   #     grad_accum_steps: 16
   #     learning_rate: 1e-5
   COT:
-    - base: "datumo/CAC-CoT"
+    - base: "Se00n00/reason_test"
       subset: NULL
       split: train
       limit: NULL
       max_seq_len: 2048
       batch_size: 2
       grad_accum_steps: 16
-      learning_rate: 2e-5
+      learning_rate: 6e-5
       epochs: 6
       
   TC:
