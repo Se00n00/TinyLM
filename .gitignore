@@ -46,3 +46,7 @@ MODELS
 Evaluation
 eval_standard
 gsm8k_eval
+
+
+# logs
+logs
