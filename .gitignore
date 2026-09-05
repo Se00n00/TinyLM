@@ -36,6 +36,13 @@ ev/
 # MODEL
 TinyLM2PT
 TinyLM2IFT
+TinyLM2R1
+TinyLM2R2
 
 #
 MODELS
+
+# Raw Evaluation Results 
+Evaluation
+eval_standard
+gsm8k_eval

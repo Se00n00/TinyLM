@@ -101,8 +101,16 @@ class Attention(nn.Module):
         
         distance = (pos[:, None] - pos[None, :]).clamp(min=0)
 
+        # ``alibi_slopes`` is a non-persistent buffer that can be clobbered when
+        # weights are loaded through HF's ``from_pretrained`` (which moves/casts
+        # modules after load). Recompute the deterministic slopes locally so the
+        # mask is always correct regardless of the loading path.
+        alibi_slopes = self.get_alibi_slopes(self.num_heads).view(
+            1, self.num_heads, 1, 1
+        ).to(dtype=Q.dtype, device=x.device)
+
         # [1, H, L, L]
-        alibi = -self.alibi_slopes * distance
+        alibi = -alibi_slopes * distance
         
         # CAUSAL MASK
         causal_mask = torch.tril(torch.ones(seqlen, seqlen)).bool()

@@ -188,8 +188,16 @@ class Attention(nn.Module):
         
         distance = (pos[:, None] - pos[None, :]).clamp(min=0)
 
+        # ``alibi_slopes`` is a non-persistent buffer and ``from_pretrained``
+        # clobbers such buffers (yielding garbage ALiBi masks). Recompute the
+        # deterministic slopes locally so the mask is correct on any device /
+        # dtype / loading path.
+        alibi_slopes = self.get_alibi_slopes(self.num_heads).view(
+            1, self.num_heads, 1, 1
+        ).to(dtype=Q.dtype, device=x.device)
+
         # [1, H, L, L]
-        alibi = -self.alibi_slopes * distance
+        alibi = -alibi_slopes * distance
         
         # CAUSAL MASK
         causal_mask = torch.tril(torch.ones(seqlen, seqlen)).bool()
@@ -423,8 +431,10 @@ def convert_checkpoint_to_hf(
         "norm_epsilon": 1e-8,
         "bos_token_id": tokenizer.bos_token_id,
         "eos_token_id": tokenizer.eos_token_id,
+        "pad_token_id": tokenizer.pad_token_id
+        if tokenizer.pad_token_id is not None
+        else tokenizer.eos_token_id,
         "use_cache": False,
-        "torch_dtype": "float16"
     }
 
     with open(os.path.join(output_dir, "config.json"), "w", encoding="utf-8") as f:
@@ -444,6 +454,16 @@ def convert_checkpoint_to_hf(
 
     # 5. Save Tokenizer
     tokenizer.save_pretrained(output_dir)
+
+    # Ensure the chat template is persisted into tokenizer_config.json so that
+    # lm-eval's ``--apply_chat_template`` (used by the IFT / RFT stages) works.
+    tok_cfg_path = os.path.join(output_dir, "tokenizer_config.json")
+    tok_cfg = json.load(open(tok_cfg_path, encoding="utf-8"))
+    chat_template = tokenizer.chat_template or tok_cfg.get("chat_template")
+    if chat_template:
+        tok_cfg["chat_template"] = chat_template
+        with open(tok_cfg_path, "w", encoding="utf-8") as f:
+            json.dump(tok_cfg, f, indent=2, ensure_ascii=False)
 
     print(f"  [Successfully Saved HF Model & Tokenizer to '{output_dir}']")
 
