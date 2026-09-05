@@ -23,9 +23,9 @@
 
 ---
 
-## Model Architecture Overview [Architecture - Experimentations](experiments/EXPERIMENTS.md)
+## Model Architecture Overview
 
-TinyLM leverages a pre-normalization architecture with gated feedforward networks
+TinyLM leverages a pre-normalization architecture with gated feedforward networks. Architecture experiments and ablations are documented under [`experiments/`](experiments).
 
 > The current architecture (below) uses **ALiBi** positional bias. The
 > earlier release, **TinyLM-1-70M**, used a different attention design —
@@ -58,12 +58,55 @@ TinyLM leverages a pre-normalization architecture with gated feedforward network
 
 ## Navigation Menu
 
+- [Project Structure](#project-structure)
 - [Model Architecture Overview](#model-architecture-overview)
 - [Model Evaluation](#model-evaluation)
-- [Deep-Dive Algorithmic Mechanics](#deep-dive-algorithmic-mechanics)
-- [Installation & Data Preparation](#installation--data-preparation)
 - [5-Stage Pipeline](#the-5-stage-llm-pipeline)
 - [Streaming Inference](#asynchronous-streaming-inference)
+
+---
+
+## Project Structure
+
+```
+GPT/
+├── README.md                  Project documentation
+├── LICENSE
+├── requirements.txt
+├── inference.py               Interactive streaming CLI inference
+│
+├── Model/                     Core model implementation
+│   ├── layers.py              RMSNorm, attention (ALiBi), gated FFN
+│   ├── models.py              Decoder-only transformer definitions
+│   └── loss.py                Loss functions
+│
+├── trainer/                   TinyLM Training framework (PT / IFT / RFT / TC)
+│   ├── train.py               Entry point
+│   ├── config.yaml            Pipeline & dataset configuration
+│   ├── base.py                Base trainer
+│   ├── util.py                Dataset preprocessing helpers
+│   ├── TRAINER.md             Trainer documentation
+│   ├── sfttrainer/            SFT trainer (PT, IFT, RFT, TC)
+│   ├── grpotrainer/           GRPO trainer + reward support (ongoing)
+│   │   └── Supports/rewards.py
+│   └── opdtrainer/            OPD trainer (ongoing)
+│
+│
+├── experiments/               Architecture experiments & ablations
+│   ├── alibi.md
+│   └── naive_mha.md
+│
+├── docs/                      Extended documentation
+│   ├── TOKENIZER.md
+│   └── Decisions.md
+│
+└──── misc/                      Helper scripts & loss charts
+   ├── calculate_tokens.py
+   ├── convert2huggingface.py
+   ├── evaluate_wikitext.py
+   └── *.png                  Loss/perplexity charts
+
+```
 
 ---
 
@@ -105,7 +148,7 @@ Training Informations:
 
 #### Training / Validation Loss
 
-<img src="pretrain_loss_chart.png">
+<img src="misc/pretrain_loss_chart.png">
 <div align="center">train vs validation loss</div>
 
 ---
@@ -177,7 +220,7 @@ Training Informations:
 
 #### Training / Validation Loss
 
-<img src="ift_loss_chart.png">
+<img src="misc/ift_loss_chart.png">
 <div align="center">train vs validation loss</div>
 
 ---
