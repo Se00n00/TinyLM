@@ -1,22 +1,23 @@
 <div align="center">
 
-```
-        ▄
-▀▀█▀▀   ▀               █     █▄ ▄█ ▄▀▀▀▄       █▀▀▀▀ ▄▀▀▀▄ █▄ ▄█
-  █    ▀█   █▀▀▀▄ █   █ █     █ █ █ ▀   █       █▄▄▄  █ ▄▀█ █ █ █
-  █     █   █   █ █   █ █     █   █   ▄▀  ▀▀▀▀▀     █ █▀  █ █   █
-  █    ▄█▄  █   █ ▀▄▄▄█ █▄▄▄▄ █   █ ▄█▄▄▄       ▀▄▄▄▀ ▀▄▄▄▀ █   █
-                   ▄▄▄▀
-```
+````bash
+                ▄
+        ▀▀█▀▀   ▀               █     █▄ ▄█ ▄▀▀▀▄       █▀▀▀▀ ▄▀▀▀▄ █▄ ▄█
+          █    ▀█   █▀▀▀▄ █   █ █     █ █ █ ▀   █       █▄▄▄  █ ▄▀█ █ █ █
+          █     █   █   █ █   █ █     █   █   ▄▀  ▀▀▀▀▀     █ █▀  █ █   █
+          █    ▄█▄  █   █ ▀▄▄▄█ █▄▄▄▄ █   █ ▄█▄▄▄       ▀▄▄▄▀ ▀▄▄▄▀ █   █
+                           ▄▄▄▀
+````             
 
 [![Hugging Face](https://img.shields.io/badge/Hugging%20Face-TinyLM2--50M-FFD21E.svg?logo=huggingface&logoColor=black)](https://huggingface.co/Se00n00/TinyLM-2)
 [![PyTorch 2.0+](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg?logo=pytorch&logoColor=white)](#)
-
 [![PT](https://img.shields.io/badge/PT-trained-4CAF50)](#)
 [![IFT](https://img.shields.io/badge/IFT-trained-2196F3)](#)
 [![RFT](https://img.shields.io/badge/RFT-trained-FF9800)](#)
 
 </div>
+
+---
 
 **TinyLM2-50M** is a compact decoder-only Transformer language model designed for efficient instruction following and conversational AI on edge devices, while also providing a lightweight platform for researching and understanding language-model behavior
 
